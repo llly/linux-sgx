@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -229,7 +229,9 @@ char* NonBlockingUnixCommunicationSocket::readRaw(ssize_t length)
     if (registerSocket != 0)
     {
         disconnect();
-        delete [] recBuf;
+
+        if (NULL != recBuf)
+            delete [] recBuf;
         return NULL;
     }
 

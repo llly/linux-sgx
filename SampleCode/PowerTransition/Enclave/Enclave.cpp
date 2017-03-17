@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -158,7 +158,7 @@ int increase_and_seal_data(size_t tid, struct sealed_buf_t* sealed_buf)
     // Ocall to print the unsealed secret data outside.
     // In theory, the secret data(s) SHOULD NOT be transferred outside the enclave as clear text(s).
     // So please DO NOT print any secret outside. Here printing the secret data to outside is only for demo.
-    snprintf(string_buf, BUFSIZ, "Thread %#x>: %d\n", (unsigned int)tid, temp_secret);
+    snprintf(string_buf, BUFSIZ, "Thread %#x>: %u\n", (unsigned int)tid, (unsigned int)temp_secret);
     print(string_buf);
     return 0;
 }

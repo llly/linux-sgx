@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -202,7 +202,7 @@ int EnclaveCreatorSim::initialize(sgx_enclave_id_t enclave_id)
     assert(global_data_sim_ptr != NULL);
 
     // Initialize the `seed' to `g_global_data_sim'.
-    global_data_sim_ptr->seed = (uint32_t)time(NULL);
+    global_data_sim_ptr->seed = (uint64_t)time(NULL);
 
     global_data_sim_ptr->secs_ptr = ce->get_secs();
     sgx_cpu_svn_t temp_cpusvn = {{0}};

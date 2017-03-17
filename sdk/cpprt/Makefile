@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -56,7 +56,7 @@ CPP_OBJS := $(CPP_SRCS:.cpp=.o)
 CC_OBJS  := $(CC_SRCS:.cc=.o)
 C_OBJS   := $(C_SRCS:.c=.o)
 
-OBJS := $(CPP_OBJS) $(C_OBJS) $(CC_OBJS)
+OBJS := $(sort $(CPP_OBJS) $(C_OBJS) $(CC_OBJS))
 
 $(C_OBJS): %.o: %.c
 	$(CC) -c  $(CFLAGS)   $(CPPFLAGS) $< -o $@
@@ -78,9 +78,6 @@ prepare-libunwind:
 $(CPPRT): $(OBJS) prepare-libunwind libunwind
 	$(CP) linux/libunwind/src/.libs/libunwind.a $(CPPRT)
 	$(AR) rs $@ $(OBJS)
-
-$(CPPRT): CC  = gcc
-$(CPPRT): CXX = g++
 
 .PHONY: libunwind
 libunwind:

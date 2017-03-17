@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -35,10 +35,10 @@ include buildenv.mk
 all: sdk psw
 
 psw: sdk
-	$(MAKE) -C psw/
+	$(MAKE) -C psw/ USE_OPT_LIBS=$(USE_OPT_LIBS)
 
 sdk:
-	$(MAKE) -C sdk/
+	$(MAKE) -C sdk/ USE_OPT_LIBS=$(USE_OPT_LIBS)
 
 # Generate SE SDK Install package
 sdk_install_pkg: sdk
@@ -53,4 +53,6 @@ clean:
 	@$(RM)   -r $(ROOT_DIR)/build
 	@$(RM)   -r linux/installer/bin/sgx_linux*.bin
 
-rebuild: clean all
+rebuild:
+	$(MAKE) clean
+	$(MAKE) all

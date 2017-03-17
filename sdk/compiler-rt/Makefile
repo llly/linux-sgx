@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -36,7 +36,7 @@ CPPFLAGS += $(ADDED_INC)                \
             -I$(COMMON_DIR)/inc/tlibc/
 
 SRCS := $(wildcard *.c)
-OBJS := $(SRCS:.c=.o)
+OBJS := $(sort $(SRCS:.c=.o))
 
 TARGET  := libcompiler-rt.a
 

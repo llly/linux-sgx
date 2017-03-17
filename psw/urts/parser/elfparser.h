@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -87,6 +87,7 @@ public:
 
     sgx_status_t modify_info(enclave_diff_info_t *enclave_diff_info);
     sgx_status_t get_info(enclave_diff_info_t *enclave_diff_info);
+    void get_executable_sections(vector<const char *>& xsec_names) const;
 
 private:
     const uint8_t*      m_start_addr;

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -47,6 +47,10 @@ __attribute__((constructor))
 // Initializer of the uae_service_sim.
 static void init_ipp(void)
 {
+#ifdef SGX_USE_OPT_LIB
+    // The return value of ippInit is discarded.
+    ippInit();
+#endif
 }   
 
 static char g_vmc_base_path[] = "/var/tmp/";

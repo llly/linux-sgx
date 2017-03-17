@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -56,7 +56,7 @@ extern "C" bool write_data_to_file(const char *filename, std::ios_base::openmode
     return true;
 }
 
-extern "C" long get_file_size(const char *filename)
+extern "C" size_t get_file_size(const char *filename)
 {
     std::ifstream ifs(filename, std::ios::in | std::ios::binary);
     if(!ifs.good())

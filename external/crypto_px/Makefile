@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -31,7 +31,7 @@
 
 include ../../buildenv.mk
 
-CFLAGS += $(ENCLAVE_CFLAGS)  -D_PX
+CFLAGS += -fPIC  -D_PX
 ifeq ($(ARCH), x86_64)
 	CFLAGS += -D_ARCH_EM64T
 else
@@ -59,4 +59,6 @@ clean:
 	@$(RM) $(OBJS) libcrypto_px.a
 
 .PHONY: rebuild
-rebuild: clean all
+rebuild: 
+	$(MAKE) clean 
+	$(MAKE) all

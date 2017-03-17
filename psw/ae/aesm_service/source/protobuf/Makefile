@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -39,6 +39,8 @@ RPC_PB_H  = messages.pb.h
 RPC_PB_C  = messages.pb.cc
 
 PROTOC = protoc
+
+.PHONY: all clean
 
 all: $(RPC_PB_C) 
 

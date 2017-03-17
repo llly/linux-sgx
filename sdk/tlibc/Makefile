@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -41,9 +41,15 @@ CPPFLAGS += -I.                          \
             -I$(COMMON_DIR)/inc/tlibc    \
             -I$(COMMON_DIR)/inc/internal \
             -I$(LINUX_SDK_DIR)/trts      \
-            -I./gdtoa      \
+            -I./gdtoa
 
+ifneq ($(USE_OPT_LIBS), 0)
+CFLAGS += -D_TLIBC_USE_INTEL_FAST_STRING_
+CXXFLAGS += -D_TLIBC_USE_INTEL_FAST_STRING_
+LIBC_C_SRCS := $(wildcard gen/*.c gdtoa/*.c locale/*.c math/*.c stdlib/*.c string/*.c stdio/*.c time/*.c) 
+else
 LIBC_C_SRCS := $(wildcard gen/*.c gdtoa/*.c locale/*.c stdlib/*.c string/*.c stdio/*.c time/*.c)
+endif
 
 LIBC_CPP_SRCS := $(wildcard gen/*.cpp) tstdc_version.cpp
 LIBC_ASM_SRCS := $(wildcard gen/*.S)
@@ -51,6 +57,7 @@ LIBC_ASM_SRCS := $(wildcard gen/*.S)
 LIBC_OBJS := $(LIBC_C_SRCS:.c=.o)
 LIBC_OBJS += $(LIBC_CPP_SRCS:.cpp=.o)
 LIBC_OBJS += $(LIBC_ASM_SRCS:.S=.o)
+LIBC_OBJS := $(sort $(LIBC_OBJS))
 
 LIBC_NAME    := libtlibc.a
 

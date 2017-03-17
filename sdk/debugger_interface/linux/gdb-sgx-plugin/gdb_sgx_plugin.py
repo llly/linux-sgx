@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 #
-# Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -44,6 +44,7 @@ SIZE = gdb.parse_and_eval("sizeof(long)")
 ET_SIM = 0x1
 ET_DEBUG = 0x2
 PAGE_SIZE = 0x1000
+KB_SIZE = 1024
 # The following definitions should strictly align with the structure of
 # debug_enclave_info_t in uRTS.
 # Here we only care about the first 7 items in the structure.
@@ -108,7 +109,8 @@ def target_path_to_host_path(target_path):
     strpath = gdb.execute("show solib-search-path", False, True)
     path = strpath.split()[-1]
     strlen = len(path)
-    path = path[0:strlen-1]
+    if strlen != 1:
+        path = path[0:strlen-1]
     host_path = path + "/" + so_name
     #strlen = len(host_path)
     #host_path = host_path[0:strlen-7]
@@ -218,7 +220,8 @@ class enclave_info(object):
     def get_peak_stack_used(self):
         """Get the peak value of the stack used"""
         peak_stack_used = 0
-        for stack_addr in self.stack_addr_list:
+        gen = (addr for addr in self.stack_addr_list if addr != 0)
+        for stack_addr in gen:
             page_index = self.find_boundary_page_index(stack_addr, self.stack_size)
             if page_index == (self.stack_size)/PAGE_SIZE - 1:
                 continue
@@ -244,14 +247,16 @@ class enclave_info(object):
             if peak_stack_used == -1:
                 print ("Failed to collect the stack usage information for \"{0:s}\"".format(self.enclave_path))
             else:
-                print ("  [Peak stack used]: {0:x}".format(peak_stack_used))
+                peak_stack_used_align = (peak_stack_used + KB_SIZE - 1) & ~(KB_SIZE - 1)
+                print ("  [Peak stack used]: {0:d} KB".format(peak_stack_used_align >> 10))
             peak_heap_used = self.get_peak_heap_used()
             if peak_heap_used == -1:
                 print ("Failed to collect the heap usage information for \"{0:s}\"".format(self.enclave_path))
             elif peak_heap_used == -2:
                 print ("  [Can't get peak heap used]: You may use version script to control symbol export. Please export \'g_peak_heap_used\' in your version script.")
             else:
-                print ("  [Peak heap used]:  {0:x}".format(peak_heap_used))
+                peak_heap_used_align = (peak_heap_used + KB_SIZE - 1) & ~(KB_SIZE - 1)
+                print ("  [Peak heap used]:  {0:d} KB".format(peak_heap_used_align >> 10))
 
     def fini_enclave_debug(self):
         # If it is HW product enclave, nothing to do
@@ -328,6 +333,7 @@ def retrieve_enclave_info(info_addr = 0):
         print ("Error: tcs info address = {0:x}".format(tcs_info_addr))
         return None
 
+    stacksize = 0;
     while tcs_info_addr is not 0:
         tcs_info_str = read_from_memory(tcs_info_addr, 3*SIZE)
         if tcs_info_str == None:
@@ -354,7 +360,10 @@ def retrieve_enclave_info(info_addr = 0):
         #print ("thread_info:%#x, last_sp:%#x, stack_base_addr:%#x, stack_limit_addr:%#x" \
         #     % (td_tuple[0], td_tuple[1], td_tuple[2], td_tuple[3]));
 
-        stacksize = td_tuple[2] - td_tuple[3]   #stack size = stack_base_addr - stack_limit_addr
+        if td_tuple[2] != td_tuple[3]:
+            #stack size = ROUND_TO_PAGE(stack_base_addr - stack_limit_addr) since we have
+            #a static stack whose size is smaller than PAGE_SIZE
+            stacksize = (td_tuple[2] - td_tuple[3] + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)
         stack_addr_list.append(td_tuple[3])     #use stack limit addr as stack base address
         tcs_addr_list.append(tcs_info_tuple[1])
         tcs_info_addr = tcs_info_tuple[0]
@@ -448,6 +457,8 @@ def is_bp_in_urts():
         return True
 
 def init_enclaves_debug():
+    #execute "set displaced-stepping off" to workaround the gdb 7.11 issue
+    gdb.execute("set displaced-stepping off", False, True)
     enclave_info_addr = gdb.parse_and_eval("*(void**)&g_debug_enclave_info_list")
     while enclave_info_addr != 0:
         node = retrieve_enclave_info(enclave_info_addr)

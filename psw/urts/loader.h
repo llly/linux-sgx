@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -47,7 +47,7 @@
 #define ENCLAVE_ID_IOCTL m_enclave_id
 #else
 //only translate enclave id to start address for linux HW mode.
-#define ENCLAVE_ID_IOCTL (sgx_enclave_id_t)m_start_addr
+#define ENCLAVE_ID_IOCTL (sgx_enclave_id_t)((uintptr_t)m_start_addr)
 #endif
 
 class BinParser;

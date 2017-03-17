@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,7 +32,7 @@
 
 #include <stdlib.h>
 #include "uae_service_sim.h"
-#include "epid_types.h"
+#include "epid/common/types.h"
 #include "se_sig_rl.h"
 #include "se_quote_internal.h"
 #include "ippcp.h"
@@ -104,8 +104,7 @@ sgx_status_t sgx_init_quote(
     memset(&(p_target_info->mr_enclave), 0xEE, sizeof(sgx_measurement_t));
 
     //Make sure the size of prebuilt data are the same with target buffer.
-    static_assert(sizeof(EPID_GROUP_CERT) == sizeof(GroupPubKey),
-                  "Group cert size changed!");
+    se_static_assert(sizeof(EPID_GROUP_CERT) == sizeof(GroupPubKey)); /* "Group cert size changed*/
 
     //Copy hard coded gid into output buffer.
     GroupPubKey *p_epid_group_cert = (GroupPubKey *)const_cast<uint8_t*>(EPID_GROUP_CERT);
@@ -376,7 +375,7 @@ sgx_status_t sgx_get_quote(
                            + sizeof(RLCount)
                            + 16; // size of payload_mac
     if(p_sig_rl){
-        required_buffer_size += (sizeof(NRProof) * rl_entry_count);
+        required_buffer_size += (sizeof(NrProof) * rl_entry_count);
     }
 
     /* If the p_quote is not NULL, then we should make sure the buffer size is
@@ -427,7 +426,7 @@ sgx_status_t sgx_get_quote(
     p_signature->payload_size = (uint32_t)(sizeof(BasicSignature)
                                 + sizeof(RLver_t)
                                 + sizeof(RLCount)
-                                + (sizeof(NRProof) * rl_entry_count));
+                                + (sizeof(NrProof) * rl_entry_count));
 
     if(SGX_SUCCESS != sgx_read_rand(p_signature->iv, sizeof(p_signature->iv)))
     {

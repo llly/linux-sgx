@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -38,17 +38,17 @@
 # 
 include ../buildenv.mk
 
-.PHONY: all uae_service urts AE clean rebuld
+.PHONY: all uae_service urts AE clean rebuild
 
 all: uae_service urts AE
 
-urts:
+urts: uae_service
 	$(MAKE) -C urts/linux/
 
 uae_service:
 	$(MAKE) -C uae_service/linux/
 
-AE:
+AE: urts
 	$(MAKE) -C ae/
 
 clean:
@@ -56,6 +56,8 @@ clean:
 	$(MAKE) -C uae_service/linux/  clean
 	$(MAKE) -C urts/linux          clean
 
-rebuild: clean all
+rebuild:
+	$(MAKE) clean
+	$(MAKE) all
 
 	

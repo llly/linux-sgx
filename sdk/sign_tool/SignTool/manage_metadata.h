@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -68,7 +68,7 @@ typedef enum _para_type_t
 typedef struct _xml_parameter_t
 {
     const char* name;       //the element name
-    uint64_t max_value;
+    uint64_t max_value;  
     uint64_t min_value;
     uint64_t value;         //parameter value. Initialized with the default value.
     uint32_t flag;          //Show whether it has been matched

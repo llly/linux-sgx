@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -64,7 +64,7 @@ TARGET      := libsgx_ptrace.so
 all: $(TARGET) install
 
 .PHONY:install
-install: | $(GDB_OUT_DIR) $(GDB_PLUGINS_FILES)
+install: $(TARGET) | $(GDB_OUT_DIR) $(GDB_PLUGINS_FILES)
 	$(CP) $(GDB_PLUGINS_FILES) $(GDB_OUT_DIR)
 	$(CP) $(TARGET) $(BUILD_DIR)
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -436,9 +436,9 @@ tlv_status_t TLVsMsg::add_nonce(const uint8_t *nonce, uint32_t nonce_size)
 }
 
 
-tlv_status_t TLVsMsg::add_epid_gid(const GroupID& gid)
+tlv_status_t TLVsMsg::add_epid_gid(const GroupId& gid)
 {
-    ADD_TLV_BY_DATA_SIZE(TLV_EPID_GID, &gid, sizeof(GroupID))
+    ADD_TLV_BY_DATA_SIZE(TLV_EPID_GID, &gid, sizeof(GroupId))
 }
 
 

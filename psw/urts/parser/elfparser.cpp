@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -847,4 +847,20 @@ sgx_status_t ElfParser::get_info(enclave_diff_info_t *enclave_diff_info)
 {
     UNUSED(enclave_diff_info);
     return SGX_SUCCESS;
+}
+
+void ElfParser::get_executable_sections(vector<const char *>& xsec_names) const
+{
+    xsec_names.clear();
+
+    const ElfW(Ehdr) *elf_hdr = (const ElfW(Ehdr) *)m_start_addr;
+    const ElfW(Shdr) *shdr = GET_PTR(ElfW(Shdr), elf_hdr, elf_hdr->e_shoff);
+    const char *shstrtab = GET_PTR(char, elf_hdr, shdr[elf_hdr->e_shstrndx].sh_offset);
+
+    for (unsigned idx = 0; idx < elf_hdr->e_shnum; ++idx, ++shdr)
+    {
+        if ((shdr->sh_flags & SHF_EXECINSTR) == SHF_EXECINSTR)
+            xsec_names.push_back(shstrtab + shdr->sh_name);
+    }
+    return;
 }

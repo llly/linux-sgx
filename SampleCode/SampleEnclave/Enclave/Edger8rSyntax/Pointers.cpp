@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -78,7 +78,7 @@ size_t ecall_pointer_user_check(void *val, size_t sz)
     
     int32_t sum = checksum_internal((char *)tmp, len);
     printf("Checksum(0x%p, %zu) = 0x%x\n", 
-            val, len, sum);
+            val, len, (unsigned int)sum);
     
     /* modify outside memory directly */
     memcpy(val, "SGX_SUCCESS", len>12?12:len);

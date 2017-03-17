@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -64,7 +64,7 @@ typedef struct _global_data_sim_t
 {
     secs_t* secs_ptr; 
     sgx_cpu_svn_t cpusvn_sim;
-    uint32_t seed;      /* to initialize the PRNG */
+    uint64_t seed;      /* to initialize the PRNG */
 } global_data_sim_t;
 
 #ifdef __cplusplus

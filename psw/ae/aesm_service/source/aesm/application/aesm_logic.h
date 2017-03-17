@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -143,7 +143,7 @@ public:
 
     static uint32_t endpoint_selection(endpoint_selection_infos_t& es_info);
     enum {GIDMT_UNMATCHED, GIDMT_NOT_AVAILABLE, GIDMT_MATCHED,GIDMT_UNEXPECTED_ERROR};
-    static uint32_t is_gid_matching_result_in_epid_blob(const GroupID& gid);
+    static uint32_t is_gid_matching_result_in_epid_blob(const GroupId& gid);
 
     static aesm_error_t report_attestation_status(
         uint8_t* platform_info, uint32_t platform_info_size,

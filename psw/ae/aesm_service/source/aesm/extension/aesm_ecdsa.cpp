@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -50,7 +50,7 @@ ae_error_t aesm_check_pek_signature(const signed_pek_t& signed_pek, const extend
         sgx_code = check_pek_signature(signed_pek, (const sgx_ec256_public_t*)&g_pek_pub_key_little_endian, &result);
     }
     else{
-        sgx_code = check_pek_signature(signed_pek, (const sgx_ec256_public_t*)xegb.pek_sk, &result);
+        sgx_code = check_pek_signature(signed_pek, reinterpret_cast<const sgx_ec256_public_t*>(xegb.pek_sk), &result);
     }
     if(sgx_code == SGX_ERROR_OUT_OF_MEMORY)
         return AE_OUT_OF_MEMORY_ERROR;

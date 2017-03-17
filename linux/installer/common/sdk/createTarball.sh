@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -47,8 +47,8 @@ rm -fr ${INSTALL_PATH}
 # Get the architecture of the build from generated binary
 get_arch()
 {
-    local a=$(readelf -h $BUILD_DIR/sgx_sign | awk '/Class:/{print $2}')
-    test $a = ELF64 && echo 'x64' || echo 'x86'
+    local a=$(readelf -h $BUILD_DIR/sgx_sign | sed -n '2p' | awk '/:/{print $6}')
+    test $a = 02 && echo 'x64' || echo 'x86'
 }
 
 ARCH=$(get_arch)

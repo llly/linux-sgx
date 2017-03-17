@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -32,8 +32,9 @@
 ####### SGX SDK Settings ########
 
 SGX_SDK ?= /opt/intel/sgxsdk
-SGX_MODE ?= SIM
+SGX_MODE ?= HW
 SGX_ARCH ?= x64
+SGX_DEBUG ?= 1
 
 ifeq ($(shell getconf LONG_BIT), 32)
 	SGX_ARCH := x86
@@ -149,15 +150,25 @@ Signed_Enclave_Name := libenclave.signed.so
 Enclave_Config_File := Enclave/Enclave.config.xml
 
 ifeq ($(SGX_MODE), HW)
-ifneq ($(SGX_DEBUG), 1)
-ifneq ($(SGX_PRERELEASE), 1)
-Build_Mode = HW_RELEASE
+ifeq ($(SGX_DEBUG), 1)
+	Build_Mode = HW_DEBUG
+else ifeq ($(SGX_PRERELEASE), 1)
+	Build_Mode = HW_PRERELEASE
+else
+	Build_Mode = HW_RELEASE
 endif
+else
+ifeq ($(SGX_DEBUG), 1)
+	Build_Mode = SIM_DEBUG
+else ifeq ($(SGX_PRERELEASE), 1)
+	Build_Mode = SIM_PRERELEASE
+else
+	Build_Mode = SIM_RELEASE
 endif
 endif
 
 ifeq ($(Build_Mode), HW_RELEASE)
-all: $(App_Name) $(Enclave_Name)
+all: .config_$(Build_Mode)_$(SGX_ARCH) $(App_Name) $(Enclave_Name)
 	@echo "The project has been built in release hardware mode."
 	@echo "Please sign the $(Enclave_Name) first with your signing key before you run the $(App_Name) to launch and access the enclave."
 	@echo "To sign the enclave use the command:"
@@ -165,11 +176,23 @@ all: $(App_Name) $(Enclave_Name)
 	@echo "You can also sign the enclave using an external signing tool."
 	@echo "To build the project in simulation mode set SGX_MODE=SIM. To build the project in prerelease mode set SGX_PRERELEASE=1 and SGX_MODE=HW."
 else
-all: $(App_Name) $(Signed_Enclave_Name)
-	@echo "Build $(App_Name) [$(SGX_MODE)|$(SGX_ARCH)] Success!"
-	@echo "Please RUN the project with command:"
-	@echo "    $(App_Name)"
+all: .config_$(Build_Mode)_$(SGX_ARCH) $(App_Name) $(Signed_Enclave_Name)
+ifeq ($(Build_Mode), HW_DEBUG)
+	@echo "The project has been built in debug hardware mode."
+else ifeq ($(Build_Mode), SIM_DEBUG)
+	@echo "The project has been built in debug simulation mode."
+else ifeq ($(Build_Mode), HW_PRERELEASE)
+	@echo "The project has been built in pre-release hardware mode."
+else ifeq ($(Build_Mode), SIM_PRERELEASE)
+	@echo "The project has been built in pre-release simulation mode."
+else
+	@echo "The project has been built in release simulation mode."
 endif
+endif
+
+.config_$(Build_Mode)_$(SGX_ARCH):
+	@rm -f .config_* $(App_Name) $(App_Objects) $(Enclave_Name) $(Enclave_Objects) App/Enclave_u.* Enclave/Enclave_t.* $(Signed_Enclave_Name) 
+	@touch .config_$(Build_Mode)_$(SGX_ARCH)
 
 ######## App Objects ########
 
@@ -217,4 +240,4 @@ $(Signed_Enclave_Name): $(Enclave_Name)
 
 
 clean:
-	@rm -f $(App_Name) $(App_Objects) $(Enclave_Name) $(Enclave_Objects) App/Enclave_u.* Enclave/Enclave_t.* $(Signed_Enclave_Name)
+	@rm -f .config_* $(App_Name) $(App_Objects) $(Enclave_Name) $(Enclave_Objects) App/Enclave_u.* Enclave/Enclave_t.* $(Signed_Enclave_Name)

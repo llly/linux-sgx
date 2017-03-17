@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -52,7 +52,7 @@ static ae_error_t prov_es_gen_header(provision_request_header_t *es_header,
     es_header->protocol = ENDPOINT_SELECTION;
     es_header->type = TYPE_ES_MSG1;
     es_header->version = TLV_VERSION_1;
-    if(0!=memcpy_s(es_header->xid, XID_SIZE, xid, XID_SIZE)){
+    if(0!=memcpy_s(es_header->xid, sizeof(es_header->xid), xid, XID_SIZE)){
         AESM_DBG_FATAL("memcpy error");
         return PVE_UNEXPECTED_ERROR;
     }

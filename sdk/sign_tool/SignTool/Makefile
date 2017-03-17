@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -34,20 +34,20 @@ include ../../../buildenv.mk
 CXXFLAGS += -Werror
 CFLAGS   += -Werror
 
-CXXFLAGS += $(ADDED_INC)
-CPPFLAGS += -I$(COMMON_DIR)/inc                         \
-            -I$(COMMON_DIR)/inc/internal                \
-            -I$(COMMON_DIR)/inc/internal/linux/         \
-            -I$(LINUX_PSW_DIR)/urts                     \
-            -I$(LINUX_PSW_DIR)/urts/linux               \
-            -I$(LINUX_EXTERNAL_DIR)/tinyxml             \
-            -I$(LINUX_EXTERNAL_DIR)/crypto_px/include   \
-            -I$(LINUX_PSW_DIR)/urts/parser
+INC += $(ADDED_INC)
+INC +=  -I$(COMMON_DIR)/inc                         \
+        -I$(COMMON_DIR)/inc/internal                \
+        -I$(COMMON_DIR)/inc/internal/linux/         \
+        -I$(LINUX_PSW_DIR)/urts                     \
+        -I$(LINUX_PSW_DIR)/urts/linux               \
+        -I$(LINUX_EXTERNAL_DIR)/tinyxml2            \
+        -I$(SGX_IPP_INC)                            \
+        -I$(LINUX_PSW_DIR)/urts/parser
 
-IPP_LIBS := -lcrypto_px
-IPP_PATH := -L$(LINUX_EXTERNAL_DIR)/crypto_px
+IPP_LIBS := $(LD_IPP)
+IPP_PATH := $(IPP_LIBS_DIR)
 
-DIR1 := $(LINUX_EXTERNAL_DIR)/tinyxml/
+DIR1 := $(LINUX_EXTERNAL_DIR)/tinyxml2/
 DIR2 := $(COMMON_DIR)/src/
 DIR3 := $(LINUX_PSW_DIR)/urts/
 DIR4 := $(LINUX_PSW_DIR)/urts/linux
@@ -62,10 +62,7 @@ OBJ1 := manage_metadata.o      \
 
 OBJ2 := ipp_bn.o ipp_rsa_key.o ipp_rsa_pub_key.o sgx_memset_s.o
 
-OBJ3 := tinystr.o      \
-        tinyxml.o      \
-        tinyxmlerror.o \
-        tinyxmlparser.o
+OBJ3 := tinyxml2.o
 
 OBJ4 := loader.o     \
         se_detect.o  
@@ -84,26 +81,34 @@ $(BUILD_DIR):
 	@$(MKDIR) $@
 
 sgx_sign: PRIVATE_LDLIBS  := $(IPP_LIBS) -lpthread -lenclaveparser
-sgx_sign: PRIVATE_LDFLAGS := $(IPP_PATH) -L$(LINUX_PSW_DIR)/urts/parser
+sgx_sign: PRIVATE_LDFLAGS := -L$(IPP_PATH) -L$(LINUX_PSW_DIR)/urts/parser
+
+ifneq ($(USE_OPT_LIBS), 0)
+sgx_sign: $(OBJS) enclaveparser
+	$(CXX) $(CXXFLAGS) $(OBJS) $(PRIVATE_LDFLAGS) $(PRIVATE_LDLIBS) -o $@
+else
+.PHONY: libcrypto_px
+libcrypto_px:
+	$(MAKE) -C $(LINUX_EXTERNAL_DIR)/crypto_px/
+
 sgx_sign: $(OBJS) enclaveparser libcrypto_px
 	$(CXX) $(CXXFLAGS) $(OBJS) $(PRIVATE_LDFLAGS) $(PRIVATE_LDLIBS) -o $@
+endif
 
 $(CPP_OBJS): %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(INC) -c $< -o $@
 
 $(C_OBJS):   %.o: $(DIR2)%.c
-	$(CC) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(INC) -c $< -o $@
 
 .PHONY: clean
 clean:
 	$(RM) *~ *.o sgx_sign $(BUILD_DIR)/sgx_sign
 	$(MAKE) -C $(LINUX_PSW_DIR)/urts/parser/ clean
+ifeq ($(USE_OPT_LIBS), 0)
 	$(MAKE) -C $(LINUX_EXTERNAL_DIR)/crypto_px/ clean
+endif
 
 .PHONY: enclaveparser
 enclaveparser:
 	$(MAKE) -C $(LINUX_PSW_DIR)/urts/parser/
-
-.PHONY: libcrypto_px
-libcrypto_px:
-	$(MAKE) -C $(LINUX_EXTERNAL_DIR)/crypto_px/

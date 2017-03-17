@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2016 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -31,7 +31,7 @@
 
 #ifndef _SERVICE_ENCLAVE_MRSIGNER_HH_
 #define _SERVICE_ENCLAVE_MRSIGNER_HH_
-/* hard-coded mrsigner is SHA256 of CSS production signing key*/
+/* hard-coded mrsigner is SHA256 of public key of production signing key*/
 const sgx_measurement_t G_SERVICE_ENCLAVE_MRSIGNER[] =
 {
     {
