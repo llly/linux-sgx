@@ -161,7 +161,8 @@ extern "C" void __cxa_guard_abort(int64_t *guard_object)
  */
 extern "C" void __cxa_guard_release(int64_t *guard_object)
 {
-    *((char*)guard_object) = 1;
+    // Set the lowset byte to 1
+    *guard_object |= ((int64_t)1);
     __cxa_guard_abort(guard_object);
 }
 

@@ -49,16 +49,14 @@ INCLUDE += -I.                                   \
            -I$(LINUX_PSW_DIR)/ae/inc/internal    \
            -I$(LINUX_PSW_DIR)/ae/data/constants/linux
 
-EXTERNAL_LIB += -lsgx_tstdcxx -lsgx_tcrypto                \
-                -L$(EPID_SDK_DIR)/epid/verifier -lverifier \
-                -L$(EPID_SDK_DIR)/epid/common -lcommon     \
-                -L$(EPID_SDK_DIR)/ext/ipp/sources/ippcpepid/src -lippcpepid
-
+LDTFLAGS := $(LDTFLAGS_NO_CRYPTO)
+LDTFLAGS += -L$(BUILD_DIR) -Wl,--start-group -lsgx_tstdcxx -lsgx_tstdc -lsgx_trts -lsgx_tservice \
+            -L$(EPID_SDK_DIR)/epid/verifier -lverifier -L$(EPID_SDK_DIR)/epid/common -lcommon \
+	    -L$(EPID_SDK_DIR)/ext/ipp/sources/ippcpepid/src -lippcpepid -lsgx_tcrypto -Wl,--end-group
 
 SRC := $(wildcard *.cpp) $(wildcard ./X509_Parser/*.cpp)
 SRC += pse_pr_common.cpp   \
-       t_pairing_blob.cpp  \
-       sgx_sha256_128.cpp
+       t_pairing_blob.cpp
 
 OBJ := $(SRC:.cpp=.o)
 OBJS := $(sort $(OBJ) version.o)

@@ -15,9 +15,7 @@ API_11_HEADERS_INSTALL = $(wildcard ./1.1/*.h)
 
 COMMON_INCLUDE_DIR = ../../
 COMMON_MATH_INCLUDE_DIR = ./math
-COMMON_SRC =  $(wildcard ./src/*.c)
-COMMON_SRC +=  $(wildcard ./math/src/*.c)
-COMMON_SRC +=  $(wildcard ./1.1/src/*.c)
+COMMON_SRC = ./src/errors.c ./src/stack.c ./src/sigrlvalid.c ./src/grouppubkey.c ./src/commitment.c ./src/epid2params.c ./src/memory.c ./src/file_parser.c ./math/src/ecgroup.c ./math/src/pairing.c ./math/src/tatepairing.c ./math/src/ecdsa_sign.c ./math/src/sha256.c ./math/src/printutils.c ./math/src/bignum.c ./math/src/ecdsa_verify.c ./math/src/finitefield.c ./1.1/src/grouppubkey.c ./1.1/src/commitment.c ./1.1/src/epid11params.c ./1.1/src/file_parser.c
 COMMON_OBJ = $(COMMON_SRC:.c=.o)
 COMMON_LIB = ./libcommon.a
 
