@@ -17,7 +17,8 @@ API_11_HEADERS_INSTALL = ./1.1/api.h
 VERIFIER_INCLUDE_DIR = ../../
 VERIFIER_11_INCLUDE_DIR = ../../1.1
 
-VERIFIER_SRC = ./src/verify.c ./src/verifybasic.c ./src/check_privrl_entry.c ./src/sigs_linked.c ./src/context.c ./src/nrverify.c ./1.1/src/verify.c ./1.1/src/verifybasic.c ./1.1/src/check_privrl_entry.c ./1.1/src/sigs_linked.c ./1.1/src/context.c ./1.1/src/nrverify.c
+VERIFIER_SRC =  $(wildcard ./src/*.c)
+VERIFIER_SRC += $(wildcard ./1.1/src/*.c)
 VERIFIER_OBJ = $(VERIFIER_SRC:.c=.o)
 VERIFIER_LIB = ./libverifier.a
 

@@ -5,7 +5,7 @@ LIB_INSTALL_DIR = $(epidinstalldir)/lib/posix-$(ARCH)/
 
 PCP_INCLUDE_DIR = ../ippcp/src
 PCPEPID_INCLUDE_DIR = ./src
-PCPEPID_SRC = src/pcpgfpx.c src/pcpgfpecpointstuff.c src/pcpgfpstuff.c src/pcpgfpecpoint.c src/pcpgfp.c src/pcpgfpxstuff.c src/pcpgfpec.c
+PCPEPID_SRC = $(wildcard ./src/*.c)
 PCPEPID_OBJ = $(PCPEPID_SRC:.c=.o)
 PCPEPID_LIB = ./src/libippcpepid.a
 

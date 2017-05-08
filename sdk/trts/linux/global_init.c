@@ -59,13 +59,11 @@ static void do_ctors_aux(void)
     /* SGX RTS does not support .ctors currently */
    
     fp_t *p = NULL;
-    uintptr_t init_array_addr;
-    size_t init_array_size;
+    uintptr_t init_array_addr = 0;
+    size_t init_array_size = 0;
     const void *enclave_start = (const void*)&__ImageBase;
 
-    elf_get_init_array(enclave_start, &init_array_addr, &init_array_size);
-    
-    if (init_array_addr == 0 || init_array_size == 0)
+    if (0 != elf_get_init_array(enclave_start, &init_array_addr, &init_array_size)|| init_array_addr == 0 || init_array_size == 0)
         return;
 
     fp_t *fp_start = (fp_t*)(init_array_addr + (uintptr_t)(enclave_start));
