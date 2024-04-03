@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,11 +29,11 @@
  *
  */
 
+#include <sgx_secure_align.h>
 #include "arch.h"
 #include "pce_cert.h"
 #include "aeerror.h"
 #include "sgx_utils.h"
-#include "ipp_wrapper.h"
 #include <assert.h>
 #include <string.h>
 #include <stdlib.h>
@@ -122,24 +122,22 @@ ae_error_t get_pce_priv_key(
     sgx_cmac_128bit_tag_t block;
     sgx_status_t sgx_status = SGX_SUCCESS;
     ae_error_t status = AE_SUCCESS;
-    sgx_key_128bit_t key_tmp;
-    IppStatus ipp_status = ippStsNoErr;
-    IppsBigNumState *bn_d=NULL;
-    IppsBigNumState *bn_m=NULL;
-    IppsBigNumState *bn_o=NULL;
-    IppsBigNumState *bn_one=NULL;
+    //sgx_key_128bit_t key_tmp;
+    sgx::custom_alignment_aligned<sgx_key_128bit_t, sizeof(sgx_key_128bit_t), 0, sizeof(sgx_key_128bit_t)> okey_tmp;
+    sgx_key_128bit_t* pkey_tmp = &okey_tmp.v;
+
     uint8_t hash_drg_output[HASH_DRBG_OUT_LEN];
 
     memset(&content, 0, sizeof(content));
     memset(&block, 0, sizeof(block));
-    memset(&key_tmp, 0, sizeof(key_tmp));
+    memset(pkey_tmp, 0, sizeof(*pkey_tmp));
     //1-11bytes: "PAK_KEY_DER"(ascii encoded)
     memcpy(content+1, PAK_STRING, 11);
     //14-15bytes: 0x0140 (Big Endian)
     content[14]=0x01;
     content[15]=0x40;
 
-    status = get_provision_key(&key_tmp, psvn); //Generate Provisioning Key with respect to the psvn
+    status = get_provision_key(pkey_tmp, psvn); //Generate Provisioning Key with respect to the psvn
     if(status != AE_SUCCESS){
         goto ret_point;
     }
@@ -148,7 +146,7 @@ ae_error_t get_pce_priv_key(
 
     //Block 1 = AES-CMAC(Provisioning Key, PAK string with Counter = 0x01)
     content[0] = 0x01;
-    if((sgx_status=sgx_rijndael128_cmac_msg(reinterpret_cast<const sgx_cmac_128bit_key_t *>(key_tmp),  
+    if((sgx_status=sgx_rijndael128_cmac_msg(reinterpret_cast<const sgx_cmac_128bit_key_t *>(*pkey_tmp),  
         content, sizeof(content), &block))!=SGX_SUCCESS){
             if(sgx_status == SGX_ERROR_OUT_OF_MEMORY){
                 status = AE_OUT_OF_MEMORY_ERROR;
@@ -161,7 +159,7 @@ ae_error_t get_pce_priv_key(
 
     //Block 2 = AES-CMAC(Provisioning Key, PAK string with Counter = 0x02)
     content[0] = 0x02;
-    if((sgx_status=sgx_rijndael128_cmac_msg(reinterpret_cast<const sgx_cmac_128bit_key_t *>(key_tmp),  
+    if((sgx_status=sgx_rijndael128_cmac_msg(reinterpret_cast<const sgx_cmac_128bit_key_t *>(*pkey_tmp),  
         content, sizeof(content), &block))!=SGX_SUCCESS){
             if(sgx_status == SGX_ERROR_OUT_OF_MEMORY){
                 status = AE_OUT_OF_MEMORY_ERROR;
@@ -174,7 +172,7 @@ ae_error_t get_pce_priv_key(
 
     //Block 3 = AES-CMAC(Provisioning Key, PAK string with Counter = 0x03)
     content[0] = 0x03;
-    if((sgx_status=sgx_rijndael128_cmac_msg(reinterpret_cast<const sgx_cmac_128bit_key_t *>(key_tmp),  
+    if((sgx_status=sgx_rijndael128_cmac_msg(reinterpret_cast<const sgx_cmac_128bit_key_t *>(*pkey_tmp),  
         content, sizeof(content), &block))!=SGX_SUCCESS){
             if(sgx_status == SGX_ERROR_OUT_OF_MEMORY){
                 status = AE_OUT_OF_MEMORY_ERROR;
@@ -186,56 +184,23 @@ ae_error_t get_pce_priv_key(
     //PAK Seed = most significant 320 bits of (Block 1 || Block 2 || Block 3).
     memcpy(hash_drg_output + 2*sizeof(sgx_cmac_128bit_tag_t), block, HASH_DRBG_OUT_LEN - 2*sizeof(sgx_cmac_128bit_tag_t));
 
-    Ipp32u i;
+    uint32_t i;
     for (i = 0; i<HASH_DRBG_OUT_LEN / 2; i++){//big endian to little endian
         hash_drg_output[i] ^= hash_drg_output[HASH_DRBG_OUT_LEN - 1 - i];
         hash_drg_output[HASH_DRBG_OUT_LEN-1-i] ^= hash_drg_output[i];
         hash_drg_output[i] ^= hash_drg_output[HASH_DRBG_OUT_LEN - 1 - i];
     }
 
-#define IPP_ERROR_TRANS(ipp_status) \
-    if ( ippStsMemAllocErr == ipp_status) \
-    { \
-        status = AE_OUT_OF_MEMORY_ERROR; \
-        goto ret_point; \
-    } \
-    else if(ippStsNoErr != ipp_status){ \
-        status = PCE_UNEXPECTED_ERROR; \
-        goto ret_point; \
-    }
+	se_static_assert(sizeof(sgx_nistp256_r_m1) == sizeof(sgx_ec256_private_t)); /*Unmatched size*/
+																				//calculate pce private key
+	if (sgx_calculate_ecdsa_priv_key((const unsigned char*)hash_drg_output, HASH_DRBG_OUT_LEN,
+		(const unsigned char*)sgx_nistp256_r_m1, sizeof(sgx_nistp256_r_m1),
+		(unsigned char*)wrap_key, sizeof(sgx_ec256_private_t)) != SGX_SUCCESS) {
+		status = AE_FAILURE;
+	}
 
-    ipp_status = newBN(reinterpret_cast<Ipp32u *>(hash_drg_output), HASH_DRBG_OUT_LEN, &bn_d);
-    IPP_ERROR_TRANS(ipp_status);
-    ipp_status = newBN(reinterpret_cast<const Ipp32u *>(sgx_nistp256_r_m1), sizeof(sgx_nistp256_r_m1), &bn_m);//generate mod to be n-1 where n is order of ECC Group
-    IPP_ERROR_TRANS(ipp_status);
-    ipp_status = newBN(NULL, sizeof(sgx_nistp256_r_m1), &bn_o);//alloc memory for output
-    IPP_ERROR_TRANS(ipp_status);
-    ipp_status = ippsMod_BN(bn_d, bn_m, bn_o);
-    IPP_ERROR_TRANS(ipp_status);
-    i=1;
-    ipp_status = newBN(&i, sizeof(uint32_t), &bn_one);//create big number 1
-    IPP_ERROR_TRANS(ipp_status);
-
-    ipp_status = ippsAdd_BN(bn_o, bn_one, bn_o);//added by 1
-    IPP_ERROR_TRANS(ipp_status);
-
-    se_static_assert(sizeof(sgx_nistp256_r_m1)==sizeof(sgx_ec256_private_t)); /*Unmatched size*/
-    ipp_status = ippsGetOctString_BN(reinterpret_cast<Ipp8u *>(wrap_key), sizeof(sgx_nistp256_r_m1), bn_o);//output data in bigendian order
-    IPP_ERROR_TRANS(ipp_status);
 ret_point:
-    if(NULL!=bn_d){
-        secure_free_BN(bn_d, HASH_DRBG_OUT_LEN);
-    }
-    if(NULL!=bn_m){
-        secure_free_BN(bn_m, sizeof(sgx_nistp256_r_m1));
-    }
-    if(NULL!=bn_o){
-        secure_free_BN(bn_o, sizeof(sgx_nistp256_r_m1));
-    }
-    if(NULL!=bn_one){
-        secure_free_BN(bn_one, sizeof(uint32_t));
-    }
-    (void)memset_s(&key_tmp, sizeof(key_tmp), 0, sizeof(key_tmp));
+    (void)memset_s(pkey_tmp, sizeof(*pkey_tmp), 0, sizeof(*pkey_tmp));
     (void)memset_s(&hash_drg_output, sizeof(hash_drg_output), 0, sizeof(hash_drg_output));
     (void)memset_s(&block, sizeof(block), 0, sizeof(block));
     if(status!=AE_SUCCESS){

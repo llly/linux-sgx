@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -31,20 +31,29 @@
 
 include ../../buildenv.mk
 
-CHECK_CURL := $(shell which curl-config)
+CHECK_CMAKE := $(shell which cmake)
 
-ifeq ($(CHECK_CURL), )
-    CURL_RESULT := check_fail
+ifeq ($(CHECK_CMAKE), )
+    CMAKE_RESULT := cmake_check_fail
 else
-    CURL_RESULT :=
+    CMAKE_RESULT :=
+endif
+
+CHECK_PREBUILT :=
+ifeq ("$(wildcard data/prebuilt/libsgx_le.signed.so)", "")
+CHECK_PREBUILT := prebuilt_check_fail
 endif
 
 .PHONY: all
-all: $(CURL_RESULT) AESM COPY_AES CSE| $(BUILD_DIR)
+ifeq ($(BUILD_REF_LE), 1)
+all: $(CMAKE_RESULT) AESM REF_LE COPY_AES| $(BUILD_DIR)
+else
+all: $(CMAKE_RESULT) AESM COPY_AES| $(BUILD_DIR)
+endif #($(BUILD_REF_LE), 1)
 
-# COPY_AES: currently copy le, qe, pve, pce, pse_op, pse_pr
+# COPY_AES: currently copy le, qe, pve, pce, qe3
 .PHONY: COPY_AES
-COPY_AES: | $(BUILD_DIR)
+COPY_AES: $(CHECK_PREBUILT) | $(BUILD_DIR)
 	$(CP) data/prebuilt/* $(BUILD_DIR)
 
 .PHONY: AESM
@@ -53,29 +62,35 @@ AESM: | $(BUILD_DIR)
 	$(CP) aesm_service/config/aesmd_service/aesmd.conf $(BUILD_DIR)
 	$(CP) aesm_service/config/aesmd_service/aesmd.service $(BUILD_DIR)
 
-.PHONY: CSE
-CSE: | $(BUILD_DIR)
-	$(MAKE) -C cse_provision_tool
-	@$(CP) cse_provision_tool/cse_provision_tool $|
+.PHONY: REF_LE
+REF_LE:
+	$(MAKE) -C ref_le
 
 $(BUILD_DIR):
 	@$(MKDIR) $@
 
 .PHONY: clean
-clean::
+clean:
 	$(MAKE) -C aesm_service/                   clean
-	$(MAKE) -C cse_provision_tool              clean
+	$(MAKE) -C ref_le                          clean
 
 .PHONY: rebuild
 rebuild:
 	$(MAKE) clean
 	$(MAKE) all
 
-.PHONY: check_fail
-check_fail:
-	@echo ERROR: Please install libcurl by command such as
-	@echo    apt-get install libcurl4-openssl-dev
+
+.PHONY: cmake_check_fail
+cmake_check_fail:
+	@echo ERROR: Please install cmake by command such as
+	@echo apt-get install cmake
 	@echo or
-	@echo    yum install libcurl-devel
+	@echo yum install cmake
 	@echo with root account
-	@exit 2
+	@exit 3
+
+.PHONY: prebuilt_check_fail
+prebuilt_check_fail:
+	@echo "ERROR: Please run 'download_prebuilt.sh' to download the prebuilt AEs before compiling."
+	@echo "Exiting......"
+	@exit 3

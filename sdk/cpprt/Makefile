@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -47,7 +47,7 @@ CPPFLAGS += -I$(LINUX_SDK_DIR)/trts       \
 
 CPP_SRCS := $(wildcard memory_manage/new*.cpp) \
             $(wildcard memory_manage/delete*.cpp)
-CPP_SRCS += tstdcxx_version.cpp
+CPP_SRCS += tcxx_version.cpp
 
 CC_SRCS  := $(wildcard $(LINUXDIR)/*.cc)
 C_SRCS   := $(filter-out $(LINUXDIR)/libelftc_dem_gnu3.c, $(wildcard $(LINUXDIR)/*.c))
@@ -73,29 +73,34 @@ all: $(CPPRT)
 
 .PHONY: prepare-libunwind
 prepare-libunwind:
-	$(CP) linux/pthread_compat.h linux/libunwind/include
+	$(CP) linux/pthread_compat.h $(LIBUNWIND_DIR)/include
 
 $(CPPRT): $(OBJS) prepare-libunwind libunwind
-	$(CP) linux/libunwind/src/.libs/libunwind.a $(CPPRT)
+	$(CP) $(LIBUNWIND_DIR)/src/.libs/libunwind.a $(CPPRT)
 	$(AR) rs $@ $(OBJS)
 
 .PHONY: libunwind
 libunwind:
-	cd linux/libunwind/ && ( test -f Makefile || ./autogen-linux.sh ) && $(MAKE) -j5
+	cd $(LIBUNWIND_DIR)/ && \
+		( test -f Makefile || CFLAGS="$(CFLAGS)" ./autogen.sh ) && \
+		$(MAKE) -j$(shell nproc)
 
 
 .PHONY: clean
 clean:
-	@-$(MAKE) -C linux/libunwind distclean
 	@$(RM) $(OBJS) $(CPPRT)
-	@$(RM) -r linux/libunwind/INSTALL             \
-              linux/libunwind/Makefile.in         \
-              linux/libunwind/aclocal.m4          \
-              linux/libunwind/autom4te.cache/     \
-              linux/libunwind/config/             \
-              linux/libunwind/configure           \
-              linux/libunwind/doc/Makefile.in     \
-              linux/libunwind/include/pthread_compat.h \
-              linux/libunwind/include/config.h.in \
-              linux/libunwind/src/Makefile.in
+ifeq ("$(shell test -f $(LIBUNWIND_DIR)/Makefile && echo Makefile exists)", "Makefile exists")	
+	@-$(MAKE) -C $(LIBUNWIND_DIR) clean
+endif
+	@$(RM) -r $(LIBUNWIND_DIR)/INSTALL             \
+              $(LIBUNWIND_DIR)/Makefile.in         \
+              $(LIBUNWIND_DIR)/aclocal.m4          \
+              $(LIBUNWIND_DIR)/autom4te.cache/     \
+              $(LIBUNWIND_DIR)/config/             \
+              $(LIBUNWIND_DIR)/configure           \
+              $(LIBUNWIND_DIR)/doc/Makefile.in     \
+              $(LIBUNWIND_DIR)/include/pthread_compat.h \
+              $(LIBUNWIND_DIR)/src/Makefile.in   \
+              $(LIBUNWIND_DIR)/Makefile          \
+              $(LIBUNWIND_DIR)/m4
 

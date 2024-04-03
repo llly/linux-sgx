@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,6 +34,7 @@
 #include "sgx_utils.h"
 #include "sgx_trts.h"
 #include "tSeal_internal.h"
+#include "tseal_migration_attr.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -45,10 +46,17 @@ extern "C" sgx_status_t sgx_mac_aadata(const uint32_t additional_MACtext_length,
 {
     sgx_status_t err = SGX_ERROR_UNEXPECTED;
     sgx_attributes_t attribute_mask;
-    attribute_mask.flags = SGX_FLAGS_RESERVED | SGX_FLAGS_INITTED | SGX_FLAGS_DEBUG;
+    attribute_mask.flags = TSEAL_DEFAULT_FLAGSMASK;
     attribute_mask.xfrm = 0x0;
+    uint16_t key_policy = SGX_KEYPOLICY_MRSIGNER;
 
-    err = sgx_mac_aadata_ex(SGX_KEYPOLICY_MRSIGNER, attribute_mask, TSEAL_DEFAULT_MISCMASK, additional_MACtext_length,
+    const sgx_report_t* report = sgx_self_report();
+    if (report->body.attributes.flags & SGX_FLAGS_KSS)
+    {
+        key_policy = SGX_KEYPOLICY_MRSIGNER | KEY_POLICY_KSS;
+    }
+
+    err = sgx_mac_aadata_ex(key_policy, attribute_mask, TSEAL_DEFAULT_MISCMASK, additional_MACtext_length,
         p_additional_MACtext, sealed_data_size, p_sealed_data);
     return err;
 }
@@ -62,7 +70,6 @@ extern "C" sgx_status_t sgx_mac_aadata_ex(const uint16_t key_policy,
                                             sgx_sealed_data_t *p_sealed_data)
 {
     sgx_status_t err = SGX_ERROR_UNEXPECTED;
-    sgx_report_t report;
     sgx_key_id_t keyID;
     sgx_key_request_t tmp_key_request;
     uint8_t payload_iv[SGX_SEAL_IV_SIZE];
@@ -78,13 +85,16 @@ extern "C" sgx_status_t sgx_mac_aadata_ex(const uint16_t key_policy,
     //
     // Check parameters
     //
-    // check key_request->key_policy reserved bits are not set and one of policy bits are set
-    if ((key_policy & ~(SGX_KEYPOLICY_MRENCLAVE | SGX_KEYPOLICY_MRSIGNER)) ||
+    // check key_request->key_policy
+    //  1. Reserved bits are not set 
+    //  2. Either MRENCLAVE or MRSIGNER is set
+    if ((key_policy & ~(SGX_KEYPOLICY_MRENCLAVE | SGX_KEYPOLICY_MRSIGNER | (KEY_POLICY_KSS) | SGX_KEYPOLICY_NOISVPRODID)) ||
         ((key_policy & (SGX_KEYPOLICY_MRENCLAVE | SGX_KEYPOLICY_MRSIGNER)) == 0))
     {
         return SGX_ERROR_INVALID_PARAMETER;
     }
-    if ((attribute_mask.flags & 0x3) != 0x3)
+    if (!(attribute_mask.flags & SGX_FLAGS_INITTED)
+        || !(attribute_mask.flags & SGX_FLAGS_DEBUG))
     {
         return SGX_ERROR_INVALID_PARAMETER;
     }
@@ -108,17 +118,12 @@ extern "C" sgx_status_t sgx_mac_aadata_ex(const uint16_t key_policy,
     {
         return SGX_ERROR_INVALID_PARAMETER;
     }
-    memset(&report, 0, sizeof(sgx_report_t));
     memset(p_sealed_data, 0, sealedDataSize);
     memset(&keyID, 0, sizeof(sgx_key_id_t));
     memset(&tmp_key_request, 0, sizeof(sgx_key_request_t));
 
     // Get the report to obtain isv_svn and cpu_svn
-    err = sgx_create_report(NULL, NULL, &report);
-    if (err != SGX_SUCCESS)
-    {
-        goto clear_return;
-    }
+    const sgx_report_t *report = sgx_self_report();
 
     // Get a random number to populate the key_id of the key_request
     err = sgx_read_rand(reinterpret_cast<uint8_t *>(&keyID), sizeof(sgx_key_id_t));
@@ -127,8 +132,9 @@ extern "C" sgx_status_t sgx_mac_aadata_ex(const uint16_t key_policy,
         goto clear_return;
     }
 
-    memcpy(&(tmp_key_request.cpu_svn), &(report.body.cpu_svn), sizeof(sgx_cpu_svn_t));
-    memcpy(&(tmp_key_request.isv_svn), &(report.body.isv_svn), sizeof(sgx_isv_svn_t));
+    memcpy(&(tmp_key_request.cpu_svn), &(report->body.cpu_svn), sizeof(sgx_cpu_svn_t));
+    memcpy(&(tmp_key_request.isv_svn), &(report->body.isv_svn), sizeof(sgx_isv_svn_t));
+    tmp_key_request.config_svn = report->body.config_svn;
     tmp_key_request.key_name = SGX_KEYSELECT_SEAL;
     tmp_key_request.key_policy = key_policy;
     tmp_key_request.attribute_mask.flags = attribute_mask.flags;
@@ -147,7 +153,6 @@ extern "C" sgx_status_t sgx_mac_aadata_ex(const uint16_t key_policy,
 
 clear_return:
     // Clear temp state
-    memset_s(&report, sizeof(sgx_report_t), 0, sizeof(sgx_report_t));
     memset_s(&keyID, sizeof(sgx_key_id_t), 0, sizeof(sgx_key_id_t));
     return err;
 }
@@ -195,16 +200,19 @@ extern "C" sgx_status_t sgx_unmac_aadata(const sgx_sealed_data_t *p_sealed_data,
     {
         return SGX_ERROR_INVALID_PARAMETER;
     }
-
-    // Ensure AAD does not cross enclave boundary
-    if (!(sgx_is_within_enclave(p_additional_MACtext, add_text_length) || 
-        sgx_is_outside_enclave(p_additional_MACtext, add_text_length)))
+    if(!(sgx_is_within_enclave(p_additional_MACtext_length, sizeof(*p_additional_MACtext_length)) ||
+        sgx_is_outside_enclave(p_additional_MACtext_length, sizeof(*p_additional_MACtext_length))))
     {
         return SGX_ERROR_INVALID_PARAMETER;
     }
-
     uint32_t additional_MACtext_length = *p_additional_MACtext_length;
     if (additional_MACtext_length < add_text_length) {
+        return SGX_ERROR_INVALID_PARAMETER;
+    }
+    // Ensure AAD does not cross enclave boundary
+    if (!(sgx_is_within_enclave(p_additional_MACtext, additional_MACtext_length) ||
+        sgx_is_outside_enclave(p_additional_MACtext, additional_MACtext_length)))
+    {
         return SGX_ERROR_INVALID_PARAMETER;
     }
 

@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -30,44 +30,53 @@
 #
 
 TOP_DIR := ../../..
+MITIGATION-CVE-2020-0551=LOAD
 include ../buildenv.mk
 
 CXXFLAGS  += -Werror
-CFLAGS    += -Werror 
-EXTERNAL_LIB += -L$(LINUX_EXTERNAL_DIR)/epid/ -lepid
+CFLAGS	+= -Werror
+
+QE_VER:= $(shell awk '$$2 ~ /QE_VERSION/ { print substr($$3, 2, length($$3) - 2); }' $(COMMON_DIR)/inc/internal/se_version.h)
+
+EXTERNAL_LIB += -L$(EPID_SDK_DIR)/epid/member -lmember \
+				-L$(EPID_SDK_DIR)/epid/common -lcommon
+
 INCLUDE += -I$(LINUX_PSW_DIR)/ae/data/constants/linux \
-           -I$(SGX_IPP_INC)/                          \
-           -I$(LINUX_EXTERNAL_DIR)/epid               \
-           -I$(LINUX_PSW_DIR)/ae/common               \
-           -I$(COMMON_DIR)/inc/tlibc                  \
-           -I$(LINUX_PSW_DIR)/ae/inc/internal
+           -I$(SGX_HEADER_DIR)/libcxx                 \
+           -I$(LINUX_PSW_DIR)/ae/common	              \
+           -I$(LINUX_PSW_DIR)/ae/inc/internal         \
+           -I$(EPID_SDK_DIR) 
+
 
 SRC := $(wildcard *.cpp)
-SRC += ipp_bn.cpp                     \
-       ipp_rsa_pub_key.cpp            \
-       se_ecdsa_verify_internal.cpp   \
-       se_sig_rl.cpp                  \
-       pve_qe_common.cpp 
+SRC += se_sig_rl.cpp                  \
+	   pve_qe_common.cpp 
 
 OBJ := $(SRC:.cpp=.o)
 OBJS := $(sort $(OBJ) version.o)
 
+EPID_FILTER = -Werror -nostdinc -nostdinc++
+EPID_CFLAGS = $(filter-out $(EPID_FILTER),$(ENCLAVE_CFLAGS))
+EPID_CXXFLAGS = $(filter-out $(EPID_FILTER),$(ENCLAVE_CXXFLAGS))
+
 .PHONY: all
 all: $(SONAME) 
 
+.PHONY: EPID
 EPID:
-	$(MAKE) -C $(LINUX_EXTERNAL_DIR)/epid/
+	cd $(EPID_SDK_DIR) && CFLAGS="$(EPID_CFLAGS)" CXXFLAGS="$(EPID_CXXFLAGS)" ./configure prefix=/usr/local
+	$(MAKE) -C $(EPID_SDK_DIR) 2> /dev/null
 
 $(SONAME): $(OBJS) EPID
-	$(CC) $(CFLAGS) -o $@ $(OBJS) -nostdlib -nodefaultlibs -nostartfiles $(LDTFLAGS)
-	$(STRIP)  --strip-unneeded $(SONAME)
+	$(CC) $(CFLAGS) -o $@ $(OBJS) -nostdlib -nodefaultlibs -nostartfiles -Wl,-soname=libsgx_$(AENAME).signed.so.$(call SPLIT_VERSION,$(QE_VER),1) $(LDTFLAGS)
+	$(STRIP) --strip-unneeded --remove-section=.comment --remove-section=.note $(SONAME)
 
 $(OBJ): $(AENAME)_t.c
 $(OBJ): %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -fno-exceptions -fno-rtti $(INCLUDE) $(DEFINES) -c $< -o $@
 
 $(AENAME)_t.c: $(EDLFILE)
-	@$(EDGER8R) --trusted $<
+	@$(EDGER8R) --trusted $< --search-path $(SGX_HEADER_DIR)
 
 .PHONY: clean
 clean:
@@ -75,6 +84,10 @@ clean:
 	@$(RM) *.so
 	@$(RM) *.map
 	@$(RM) *_t.*
+ifeq ("$(shell test -f $(EPID_SDK_DIR)/Makefile && echo Makefile exists)", "Makefile exists")
+	-$(MAKE) -C $(EPID_SDK_DIR) clean
+endif
+	@$(RM) -r $(EPID_SDK_DIR)/Makefile $(EPID_SDK_DIR)/config.log $(EPID_SDK_DIR)/config.status
 
 .PHONY: rebuild
 rebuild:

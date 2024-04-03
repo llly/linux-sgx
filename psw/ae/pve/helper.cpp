@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,7 +36,7 @@
 *
 * Wrap functions to get PPID, PWK, PSID, PSVN, PSK and seal/unseal function
 */
-
+#include <sgx_secure_align.h>
 #include "helper.h"
 #include "string.h"
 #include "sgx_error.h"
@@ -97,6 +97,7 @@ pve_status_t get_ppid(ppid_t* ppid)
     uint8_t content[16];
     memset(&content, 0, sizeof(content));
     
+
     //generate the mac as PPID
     se_static_assert(sizeof(sgx_cmac_128bit_key_t) == sizeof(sgx_key_128bit_t)); /*size of sgx_cmac_128bit_key_t and sgx_key_128bit_t should be same*/
     se_static_assert(sizeof(sgx_cmac_128bit_tag_t) == sizeof(ppid_t)); /*size of sgx_cmac_128bit_tag_t and ppit_t should be same*/
@@ -127,11 +128,13 @@ pve_status_t get_pwk2(
         return PVEC_PARAMETER_ERROR;
     uint8_t content[32];
     sgx_status_t sgx_status = SGX_SUCCESS;
-    sgx_key_128bit_t key_tmp;
+    //sgx_key_128bit_t key_tmp;
+    sgx::custom_alignment_aligned<sgx_key_128bit_t, sizeof(sgx_key_128bit_t), 0, sizeof(sgx_key_128bit_t)> okey_tmp;
+    sgx_key_128bit_t* pkey_tmp = &okey_tmp.v;
     pve_status_t status = PVEC_SUCCESS;
 
-    memset(&key_tmp, 0, sizeof(key_tmp));
-    status = get_provision_key(&key_tmp, psvn); //Generate Provisioning Key with respect to the psvn
+    memset(pkey_tmp, 0, sizeof(*pkey_tmp));
+    status = get_provision_key(pkey_tmp, psvn); //Generate Provisioning Key with respect to the psvn
     if(status != PVEC_SUCCESS)
         goto ret_point;
 
@@ -143,9 +146,9 @@ pve_status_t get_pwk2(
     content[OFF_BYTE_0X80] = 0x80; //fill 0x80 in byte offset 31
 
     //get the cmac of provision key as PWK2
-    se_static_assert(sizeof(sgx_cmac_128bit_key_t)==sizeof(key_tmp)); /*size of sgx_cmac_128bit_key_t should be same as sgx_key_128bit_t*/
+    se_static_assert(sizeof(sgx_cmac_128bit_key_t)==sizeof(*pkey_tmp)); /*size of sgx_cmac_128bit_key_t should be same as sgx_key_128bit_t*/
     se_static_assert(sizeof(sgx_cmac_128bit_tag_t)==sizeof(sgx_key_128bit_t)); /*size of sgx_cmac_128bit_tag_t should be same as sgx_key_128bit_t*/
-    if((sgx_status = sgx_rijndael128_cmac_msg(reinterpret_cast<const sgx_cmac_128bit_key_t *>(&key_tmp), 
+    if((sgx_status = sgx_rijndael128_cmac_msg(reinterpret_cast<const sgx_cmac_128bit_key_t *>(pkey_tmp), 
         reinterpret_cast<const uint8_t *>(content), sizeof(content),
         reinterpret_cast<sgx_cmac_128bit_tag_t *>(wrap_key)))!=SGX_SUCCESS){
             status = sgx_error_to_pve_error(sgx_status);
@@ -153,7 +156,7 @@ pve_status_t get_pwk2(
         status = PVEC_SUCCESS;
     }
 ret_point:
-    (void)memset_s(&key_tmp,sizeof(key_tmp), 0 ,sizeof(key_tmp)); //clear provisioninig key in stack
+    (void)memset_s(pkey_tmp,sizeof(*pkey_tmp), 0 ,sizeof(*pkey_tmp)); //clear provisioninig key in stack
     return status;
 }
 
@@ -190,7 +193,8 @@ pve_status_t get_pve_psk(
 //simple wrapper for memcpy but checking type of parameter
 void pve_memcpy_out(external_memory_byte_t *dst, const void *src, uint32_t size)
 {
-    memcpy(dst, src, size);
+    // Use PRT mitigated version of memcpy to copy buffer to untrusted memory 
+    memcpy_verw(dst, src, size);
 }
 
 void pve_memcpy_in(void *dst, const external_memory_byte_t *src, uint32_t size)
@@ -233,4 +237,35 @@ pve_status_t sgx_error_to_pve_error(sgx_status_t status)
     default:
         return PVEC_SE_ERROR;
     }
+}
+
+#define BLOCK_SIZE 64
+
+sgx_status_t sgx_aes_gcm128_enc_inplace_update( sgx_aes_state_handle_t aes_gcm_state, uint8_t *buf,
+    uint32_t buf_len)
+{
+    //For defense in depth, we add extra constrain that buf_len should not be too large
+    if ((buf == NULL) || (aes_gcm_state == NULL) || (buf_len >= INT_MAX) || (buf_len == 0))
+    {
+        return SGX_ERROR_INVALID_PARAMETER;
+    }
+    uint32_t off = 0;
+    uint8_t block[BLOCK_SIZE];
+    memset(block, 0, sizeof(block));
+
+    //encrypt input buffer inplace. each round encrypt BLOCK_SIZE bytes
+    //
+    for (off = 0; off < buf_len; off += BLOCK_SIZE) {
+        int enc_len = BLOCK_SIZE;
+        if (off + BLOCK_SIZE > buf_len) {
+            enc_len = buf_len - off;
+        }
+        if ((sgx_aes_gcm128_enc_update(buf + off, enc_len, block, aes_gcm_state)) != SGX_SUCCESS) {
+            return SGX_ERROR_UNEXPECTED;
+        }
+        memcpy(buf + off, block, enc_len);
+    }
+
+    return SGX_SUCCESS;
+
 }

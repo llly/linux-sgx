@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -30,15 +30,21 @@
 #
 #
 
-modinfo isgx &> /dev/null
+grep 'sgx\.ko$\|intel_sgx\.ko$' /lib/modules/$(uname -r)/modules.builtin &> /dev/null
 if [[ $? != "0" ]]; then
-    lsmod | grep isgx &> /dev/null
-    if [[ $? = "0" ]]; then
-        echo "Warning: You did not follow the document to install the driver package"
-        echo
-    else
-        echo "Please install the driver package before the PSW package"
-        exit 4
+    /sbin/modinfo isgx &> /dev/null
+    if [[ $? != "0" ]]; then
+        /sbin/modinfo intel_sgx &> /dev/null
+        if [[ $? != "0" ]]; then
+            /sbin/lsmod 2> /dev/null | grep 'isgx\|intel_sgx'
+            if [[ $? = "0" ]]; then
+                echo "Warning: You did not follow the document to install the driver package."
+                echo
+            elif [[ ! -e /dev/isgx ]] && [[ ! -e /dev/sgx ]]; then
+                echo -e "\033[31;49;1mWarning: You may need to activate the SGX module if SGX is enabled in the kernel (e.g., sudo modprobe sgx) or download and install the SGX driver if the kernel doesn't have SGX support.\033[39;49;0m"
+                echo
+            fi
+        fi
     fi
 fi
 
@@ -53,10 +59,14 @@ fi
 
 
 PKG_ARCH=@arch@
-ARCH=$(arch)
+ARCH=$(uname -m)
 
 if [ $ARCH == "i386" ] || [ $ARCH == "i586" ] || [ $ARCH == "i686" ]; then
     ARCH=x86
+fi
+
+if [ $ARCH == "x86_64" ]; then
+    ARCH=x64
 fi
 
 if [[ $ARCH != $PKG_ARCH ]]; then
@@ -70,7 +80,7 @@ if [ -d "$INSTALL_PATH" ]; then
     exit 4
 fi
 
-PATH=/usr/bin:/bin
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
 umask 022
 
 PSWPKG=`mktemp -t sgx-psw-pkg.XXXXXX`
@@ -115,7 +125,7 @@ make install
 
 popd
 
-${SGX_PACKAGES_PATH}/${PSW_PKG_NAME}/scripts/install.sh
+${SGX_PACKAGES_PATH}/${PSW_PKG_NAME}/scripts/install.sh "$@"
 
 rm -fr ${PSW_TEMP_FOLDER}
 

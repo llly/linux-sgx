@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -31,6 +31,7 @@
 
 enclave{
     include "provision_msg.h"
+    from "sgx_tstdc.edl" import *;
     trusted {
         public uint32_t gen_prov_msg1_data_wrapper([in]const extended_epid_group_blob_t *xegb,
                                                    [in]const signed_pek_t *pek,

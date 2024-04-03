@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,23 +34,137 @@
 #include "global_data.h"
 #include "util.h"
 #include "thread_data.h"
+#include "trts_internal.h"
+#include "sgx_attributes.h"
+#include "xsave.h"
 
 // No need to check the state of enclave or thread.
 // The functions should be called within an ECALL, so the enclave and thread must be initialized at that time.
+size_t get_enclave_size(void)
+{
+    return (size_t) g_global_data.enclave_size;
+}
+
+size_t get_enclave_end(void)
+{
+    return (size_t)get_enclave_base() + (size_t)g_global_data.enclave_size - 1;
+}
+
 void * get_heap_base(void)
 {
-    return GET_PTR(void, &__ImageBase, g_global_data.heap_offset);
+    return GET_PTR(void, get_enclave_base(), g_global_data.heap_offset);
 }
 
 size_t get_heap_size(void)
 {
-    return g_global_data.heap_size;
+    size_t heap_size = g_global_data.heap_size;
+    if (EDMM_supported)
+    {
+        for(uint32_t i = 0; i < g_global_data.layout_entry_num; i++)
+        {
+            if(g_global_data.layout_table[i].entry.id == LAYOUT_ID_HEAP_MAX)
+            {
+                heap_size += ((size_t)g_global_data.layout_table[i].entry.page_count << SE_PAGE_SHIFT);
+            }
+        }
+    }
+    return heap_size;
+}
+
+size_t get_heap_min_size(void)
+{
+    size_t heap_size = 0;
+    for(uint32_t i = 0; i < g_global_data.layout_entry_num; i++)
+    {
+        if(g_global_data.layout_table[i].entry.id == LAYOUT_ID_HEAP_MIN)
+        {
+            heap_size = ((size_t)g_global_data.layout_table[i].entry.page_count << SE_PAGE_SHIFT);
+            break;
+        }
+    }
+    return heap_size;
+}
+
+void * get_rsrv_base(void)
+{
+    return GET_PTR(void, get_enclave_base(), g_global_data.rsrv_offset);
+}
+
+size_t get_rsrv_end(void)
+{
+    return (size_t)get_rsrv_base() + (size_t)get_rsrv_size() - 1;
+}
+
+size_t get_rsrv_size(void)
+{
+    size_t rsrv_size = g_global_data.rsrv_size;
+    if (EDMM_supported)
+    {
+        for (uint32_t i = 0; i < g_global_data.layout_entry_num; i++)
+        {
+            if (g_global_data.layout_table[i].entry.id == LAYOUT_ID_RSRV_MAX)
+            {
+                rsrv_size += ((size_t)g_global_data.layout_table[i].entry.page_count << SE_PAGE_SHIFT);
+            }
+        }
+    }
+    return rsrv_size;
+}
+
+size_t get_rsrv_min_size(void)
+{
+    size_t rsrv_size = 0;
+    for (uint32_t i = 0; i < g_global_data.layout_entry_num; i++)
+    {
+        if (g_global_data.layout_table[i].entry.id == LAYOUT_ID_RSRV_MIN)
+        {
+            rsrv_size = ((size_t)g_global_data.layout_table[i].entry.page_count << SE_PAGE_SHIFT);
+            break;
+        }
+    }
+    return rsrv_size;
 }
 
 int * get_errno_addr(void)
 {
     thread_data_t *thread_data = get_thread_data();
     return reinterpret_cast<int *>(&thread_data->last_error);
+}
+
+//tRTS will receive a pointer to an array of uint64_t which indicates the
+//features of the running system. This function can be used to query whether
+//a certain feature (such as EDMM) is supported.
+//It takes as input the pointer to the array and the feature bit location.
+//The feature array coming from uRTS should be dealt with in the following way:
+//Every bit except the MSb in each uint64 represents a certain feature.
+//The MSb of each uint64_t, if set, indicates this is the last uint64_t to
+//search for the feature's existance.
+//For example, if we have two uint64_t elements in the array:
+//array[0]: xxxxxxxxxxxxxxxx array[1] Xxxxxxxxxxxxxxxx
+//MSb of array[1] should already be set to one by uRTS. Shown by capital 'X' here.
+//Features listed in array[0], counting from right-most bit  to left-most bit,
+//have feature shift values 0 ~ 62, while features listed in array[1], have feature
+//shift values 64 ~ 126.
+
+int feature_supported(const uint64_t *feature_set, uint32_t feature_shift)
+{
+    const uint64_t *f_set = feature_set;
+    uint32_t bit_position = 0, i = 0;
+
+    if (!f_set)
+        return 0;
+
+    while (((i+1) << 6) <= feature_shift)
+    {
+        if (f_set[i] & (0x1ULL << 63))
+            return 0;
+        i++;
+    }
+    bit_position = feature_shift - (i << 6);
+    if (f_set[i] & (0x1ULL << bit_position))
+        return 1;
+    else
+        return 0;
 }
 
 bool is_stack_addr(void *address, size_t size)
@@ -69,3 +183,60 @@ bool is_valid_sp(uintptr_t sp)
 }
 
 
+bool is_utility_thread()
+{
+    thread_data_t *thread_data = get_thread_data();
+    if ((thread_data != NULL) && (thread_data->flags & SGX_UTILITY_THREAD))
+    {
+        return true;
+    }
+    return false;
+}
+
+size_t get_max_tcs_num()
+{
+    if (EDMM_supported == 1)
+    {
+        return (size_t)g_global_data.tcs_max_num;
+    }
+    else
+    {
+	return (size_t)g_global_data.tcs_num;
+    }
+
+}
+
+bool is_pkru_enabled()
+{
+    uint64_t xfrm = get_xfeature_state();
+    if((xfrm & SGX_XFRM_PKRU) == SGX_XFRM_PKRU)
+        return true;
+    return false;
+}
+
+bool is_tcs_binding_mode()
+{
+    return g_global_data.thread_policy == TCS_POLICY_BIND ? true : false;
+}
+
+size_t get_xsave_size()
+{
+    return (size_t)g_global_data.td_template.xsave_size;
+}
+
+int get_ssa_aexnotify()
+{
+    int flag = 0;
+    thread_data_t *thread_data = get_thread_data();
+    ssa_gpr_t *ssa_gpr = NULL;
+
+    if(thread_data == NULL)
+    {
+        return 0;
+    }
+
+    ssa_gpr = reinterpret_cast<ssa_gpr_t *>(thread_data->first_ssa_gpr);
+    flag = ssa_gpr->aex_notify & SSA_AEXNOTIFY_MASK;
+
+    return flag;
+}

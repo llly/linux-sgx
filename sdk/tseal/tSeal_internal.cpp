@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -31,8 +31,10 @@
 
 
 
-
+#include <sgx_secure_align.h>
+#include <sgx_random_buffers.h>
 #include "sgx_tseal.h"
+#include "sgx_lfence.h"
 #include "tSeal_internal.h"
 #include "sgx_utils.h"
 #include <string.h>
@@ -61,21 +63,24 @@ sgx_status_t sgx_seal_data_iv(const uint32_t additional_MACtext_length,
     // Parameter checking performed in sgx_seal_data
 
     // Generate the seal key
-    // The random p_key_request->key_id guarantees the generated seal key is random
-    sgx_key_128bit_t seal_key;
-    memset(&seal_key, 0, sizeof(sgx_key_128bit_t));
-    err = sgx_get_key(p_key_request, &seal_key);
+    //randomly_placed_buffer<sgx_key_128bit_t, sizeof(sgx_key_128bit_t), 0x200> seal_key_buffer{};
+    //auto *seal_key = seal_key_buffer.randomize_object();
+    using cseal_key200 = randomly_placed_object<sgx::custom_alignment_aligned<sgx_key_128bit_t, sizeof(sgx_key_128bit_t), 0, sizeof(sgx_key_128bit_t)>, 0x200>;
+    cseal_key200 oseal_key_buf;
+    auto* oseal_key = oseal_key_buf.instantiate_object();
+    auto* seal_key = &oseal_key->v;
+    err = sgx_get_key(p_key_request, seal_key);
     if (err != SGX_SUCCESS)
     {
         // Clear temp state
-        memset_s(&seal_key, sizeof(sgx_key_128bit_t), 0, sizeof(sgx_key_128bit_t));
+
         if (err != SGX_ERROR_OUT_OF_MEMORY)
             err = SGX_ERROR_UNEXPECTED;
         return err;
     }
 
     // Encrypt the content with the random seal key and the static payload_iv
-    err = sgx_rijndael128GCM_encrypt(&seal_key, p_text2encrypt, text2encrypt_length,
+    err = random_stack_advance<0x200>(sgx_rijndael128GCM_encrypt, seal_key, p_text2encrypt, text2encrypt_length,
         reinterpret_cast<uint8_t *>(&(p_sealed_data->aes_data.payload)), p_payload_iv,
         SGX_SEAL_IV_SIZE, p_additional_MACtext, additional_MACtext_length,
         &(p_sealed_data->aes_data.payload_tag));
@@ -95,7 +100,6 @@ sgx_status_t sgx_seal_data_iv(const uint32_t additional_MACtext_length,
         p_sealed_data->aes_data.payload_size = additional_MACtext_length + text2encrypt_length;
     }
     // Clear temp state
-    memset_s(&seal_key, sizeof(sgx_key_128bit_t), 0, sizeof(sgx_key_128bit_t));
     return err;
 }
 
@@ -114,8 +118,8 @@ sgx_status_t sgx_unseal_data_helper(const sgx_sealed_data_t *p_sealed_data, uint
     uint32_t additional_MACtext_length, uint8_t *p_decrypted_text, uint32_t decrypted_text_length)
 {
     sgx_status_t err = SGX_ERROR_UNEXPECTED;
-    sgx_key_128bit_t seal_key;
-    memset(&seal_key, 0, sizeof(sgx_key_128bit_t));
+    randomly_placed_buffer<sgx_key_128bit_t, sizeof(sgx_key_128bit_t), 0x200> seal_key_buf{};
+
     uint8_t payload_iv[SGX_SEAL_IV_SIZE];
     memset(&payload_iv, 0, SGX_SEAL_IV_SIZE);
 
@@ -126,18 +130,31 @@ sgx_status_t sgx_unseal_data_helper(const sgx_sealed_data_t *p_sealed_data, uint
         memset(p_additional_MACtext, 0, additional_MACtext_length);
 
     // Get the seal key
-    err = sgx_get_key(&p_sealed_data->key_request, &seal_key);
+    //auto *seal_key = seal_key_buf.randomize_object();
+    using cseal_key200 = randomly_placed_object<sgx::custom_alignment_aligned<sgx_key_128bit_t, sizeof(sgx_key_128bit_t), 0, sizeof(sgx_key_128bit_t)>, 0x200>;
+    cseal_key200 oseal_key_buf;
+    auto* oseal_key = oseal_key_buf.instantiate_object();
+    auto* seal_key = &oseal_key->v;
+    err = sgx_get_key(&p_sealed_data->key_request, seal_key);
     if (err != SGX_SUCCESS)
     {
         // Clear temp state
-        memset_s(&seal_key, sizeof(sgx_key_128bit_t), 0, sizeof(sgx_key_128bit_t));
         // Provide only error codes that the calling code could act on
         if ((err == SGX_ERROR_INVALID_CPUSVN) || (err == SGX_ERROR_INVALID_ISVSVN) || (err == SGX_ERROR_OUT_OF_MEMORY))
             return err;
         // Return error indicating the blob is corrupted
         return SGX_ERROR_MAC_MISMATCH;
     }
-    err = sgx_rijndael128GCM_decrypt(&seal_key, const_cast<uint8_t *>(p_sealed_data->aes_data.payload),
+
+    //
+    // code that calls sgx_unseal_data commonly does some sanity checks
+    // related to plain_text_offset.  We add fence here since we don't 
+    // know what crypto code does and if plain_text_offset-related 
+    // checks mispredict the crypto code could operate on unintended data
+    //
+    sgx_lfence();
+
+    err = random_stack_advance<0x200>(sgx_rijndael128GCM_decrypt, seal_key, const_cast<uint8_t *>(p_sealed_data->aes_data.payload),
         decrypted_text_length, p_decrypted_text, &payload_iv[0], SGX_SEAL_IV_SIZE,
         const_cast<uint8_t *>(&(p_sealed_data->aes_data.payload[decrypted_text_length])), additional_MACtext_length,
         const_cast<sgx_aes_gcm_128bit_tag_t *>(&p_sealed_data->aes_data.payload_tag));
@@ -145,7 +162,6 @@ sgx_status_t sgx_unseal_data_helper(const sgx_sealed_data_t *p_sealed_data, uint
     if (err != SGX_SUCCESS)
     {
         // Clear temp state
-        memset_s(&seal_key, sizeof(sgx_key_128bit_t), 0, sizeof(sgx_key_128bit_t));
         return err;
     }
 
@@ -154,6 +170,5 @@ sgx_status_t sgx_unseal_data_helper(const sgx_sealed_data_t *p_sealed_data, uint
         memcpy(p_additional_MACtext, &(p_sealed_data->aes_data.payload[decrypted_text_length]), additional_MACtext_length);
     }
     // Clear temp state
-    memset_s(&seal_key, sizeof(sgx_key_128bit_t), 0, sizeof(sgx_key_128bit_t));
     return SGX_SUCCESS;
 }

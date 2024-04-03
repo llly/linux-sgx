@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,7 +37,9 @@
 #include "sgx_attributes.h"
 #include "sgx_key.h"
 #include "sgx_report.h"
+#include "sgx_report2.h"
 #include "sgx_tcrypto.h"
+
 
 #define SE_PAGE_SIZE 0x1000
 #define TCS_SIZE SE_PAGE_SIZE
@@ -47,7 +49,11 @@
 #define STATIC_ASSERT_UNUSED_ATTRIBUTE __attribute__((unused))
 #define _ASSERT_CONCAT(a, b) a##b
 #define ASSERT_CONCAT(a, b) _ASSERT_CONCAT(a, b)
+#ifdef  __cplusplus
+#define se_static_assert(e) static_assert(e, "static assert error")
+#else
 #define se_static_assert(e) typedef char ASSERT_CONCAT(assert_line, __LINE__)[(e)?1:-1] STATIC_ASSERT_UNUSED_ATTRIBUTE
+#endif
 
 se_static_assert(sizeof(sgx_key_request_t) == 512);
 se_static_assert(sizeof(sgx_target_info_t) == 512);
@@ -66,13 +72,16 @@ typedef struct _secs_t
 #define SECS_RESERVED2_LENGTH 32
     uint8_t                     reserved2[SECS_RESERVED2_LENGTH];  /* ( 96) reserved */
     sgx_measurement_t           mr_signer;      /* (128) Integrity Reg 1 - Enclave signing key */
-#define SECS_RESERVED3_LENGTH 96
+#define SECS_RESERVED3_LENGTH 32
     uint8_t                     reserved3[SECS_RESERVED3_LENGTH];  /* (160) reserved */
+    sgx_config_id_t             config_id;      /* (192) CONFIGID */
     sgx_prod_id_t               isv_prod_id;    /* (256) product ID of enclave */
     sgx_isv_svn_t               isv_svn;        /* (258) Security Version of the Enclave */
-#define SECS_RESERVED4_LENGTH 3836
-    uint8_t                     reserved4[SECS_RESERVED4_LENGTH];/* (260) reserved */
+    sgx_config_svn_t            config_svn;     /* (260) CONFIGSVN */
+#define SECS_RESERVED4_LENGTH 3834
+    uint8_t                     reserved4[SECS_RESERVED4_LENGTH];/* (262) reserved */
 } secs_t;
+
 
 /*
 TCS
@@ -83,7 +92,7 @@ flags definitions
 typedef struct _tcs_t
 {
     uint64_t            reserved0;       /* (0) */
-    uint64_t            flags;           /* (8)bit 0: DBGOPTION */
+    uint64_t            flags;           /* (8)bit 0: DBGOPTION, bit 1: AEXNOTIFY */
     uint64_t            ossa;            /* (16)State Save Area */
     uint32_t            cssa;            /* (24)Current SSA slot */
     uint32_t            nssa;            /* (28)Number of SSA slots */
@@ -115,9 +124,13 @@ typedef struct _exit_info_t
 #define SE_VECTOR_BP    3
 #define SE_VECTOR_BR    5
 #define SE_VECTOR_UD    6
+#define SE_VECTOR_GP    13
+#define SE_VECTOR_PF    14
 #define SE_VECTOR_MF    16
 #define SE_VECTOR_AC    17
 #define SE_VECTOR_XM    19
+
+#define SSA_AEXNOTIFY_MASK 0x1U     /* Only set the first bit */
 
 typedef struct _ssa_gpr_t
 {
@@ -142,10 +155,20 @@ typedef struct _ssa_gpr_t
     REGISTER( sp_u);                 /* (144) untrusted stack pointer. saved by EENTER */
     REGISTER( bp_u);                 /* (152) untrusted frame pointer. saved by EENTER */
     exit_info_t exit_info;              /* (160) contain information for exits */
-    uint32_t    reserved;               /* (164) padding to multiple of 8 bytes */
+    uint8_t     reserved[3];            /* (164) padding */
+    uint8_t     aex_notify;             /* (167) AEX Notify */
     uint64_t    fs;                     /* (168) FS register */
     uint64_t    gs;                     /* (176) GS register */
 } ssa_gpr_t;
+
+typedef struct _misc_exinfo
+{
+    uint64_t maddr; // address for #PF, #GP.
+    uint32_t errcd;
+    uint32_t reserved;
+} misc_exinfo_t;
+
+#define MISC_BYTE_SIZE sizeof(misc_exinfo_t)
 
 typedef uint64_t si_flags_t;
 
@@ -158,11 +181,16 @@ typedef uint64_t si_flags_t;
 #define SI_FLAG_SECS                (0x00<<SI_FLAG_PT_LOW_BIT)      /* SECS */
 #define SI_FLAG_TCS                 (0x01<<SI_FLAG_PT_LOW_BIT)      /* TCS */
 #define SI_FLAG_REG                 (0x02<<SI_FLAG_PT_LOW_BIT)      /* Regular Page */
+#define SI_FLAG_TRIM                (0x04<<SI_FLAG_PT_LOW_BIT)      /* Trim Page */
+#define SI_FLAG_PENDING             0x8
+#define SI_FLAG_MODIFIED            0x10
+#define SI_FLAG_PR                  0x20
 
 #define SI_FLAGS_EXTERNAL           (SI_FLAG_PT_MASK | SI_FLAG_R | SI_FLAG_W | SI_FLAG_X)   /* Flags visible/usable by instructions */
 #define SI_FLAGS_R                  (SI_FLAG_R|SI_FLAG_REG)
 #define SI_FLAGS_RW                 (SI_FLAG_R|SI_FLAG_W|SI_FLAG_REG)
 #define SI_FLAGS_RX                 (SI_FLAG_R|SI_FLAG_X|SI_FLAG_REG)
+#define SI_FLAGS_RWX              (SI_FLAG_R|SI_FLAG_W|SI_FLAG_X|SI_FLAG_REG)
 #define SI_FLAGS_TCS                (SI_FLAG_TCS)
 #define SI_FLAGS_SECS               (SI_FLAG_SECS)
 #define SI_MASK_TCS                 (SI_FLAG_PT_MASK)
@@ -189,6 +217,7 @@ typedef struct _page_info_t
 #define SE_KEY_SIZE         384         /* in bytes */
 #define SE_EXPONENT_SIZE    4           /* RSA public key exponent size in bytes */
 
+
 typedef struct _css_header_t {        /* 128 bytes */
     uint8_t  header[12];                /* (0) must be (06000000E100000000000100H) */
     uint32_t type;                      /* (12) bit 31: 0 = prod, 1 = debug; Bit 30-0: Must be zero */
@@ -207,16 +236,18 @@ typedef struct _css_key_t {           /* 772 bytes */
 } css_key_t;
 se_static_assert(sizeof(css_key_t) == 772);
 
-typedef struct _css_body_t {            /* 128 bytes */
-    sgx_misc_select_t   misc_select;    /* (900) The MISCSELECT that must be set */
-    sgx_misc_select_t   misc_mask;      /* (904) Mask of MISCSELECT to enforce */
-    uint8_t             reserved[20];   /* (908) Reserved. Must be 0. */
-    sgx_attributes_t    attributes;     /* (928) Enclave Attributes that must be set */
-    sgx_attributes_t    attribute_mask; /* (944) Mask of Attributes to Enforce */
-    sgx_measurement_t   enclave_hash;   /* (960) MRENCLAVE - (32 bytes) */
-    uint8_t             reserved2[32];  /* (992) Must be 0 */
-    uint16_t            isv_prod_id;    /* (1024) ISV assigned Product ID */
-    uint16_t            isv_svn;        /* (1026) ISV assigned SVN */
+typedef struct _css_body_t {             /* 128 bytes */
+    sgx_misc_select_t    misc_select;    /* (900) The MISCSELECT that must be set */
+    sgx_misc_select_t    misc_mask;      /* (904) Mask of MISCSELECT to enforce */
+    uint8_t              reserved[4];    /* (908) Reserved. Must be 0. */
+    sgx_isvfamily_id_t   isv_family_id;  /* (912) ISV assigned Family ID */
+    sgx_attributes_t     attributes;     /* (928) Enclave Attributes that must be set */
+    sgx_attributes_t     attribute_mask; /* (944) Mask of Attributes to Enforce */
+    sgx_measurement_t    enclave_hash;   /* (960) MRENCLAVE - (32 bytes) */
+    uint8_t              reserved2[16];  /* (992) Must be 0 */
+    sgx_isvext_prod_id_t isvext_prod_id; /* (1008) ISV assigned Extended Product ID */
+    uint16_t             isv_prod_id;    /* (1024) ISV assigned Product ID */
+    uint16_t             isv_svn;        /* (1026) ISV assigned SVN */
 } css_body_t;
 se_static_assert(sizeof(css_body_t) == 128);
 

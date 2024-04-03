@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -43,6 +43,9 @@ typedef enum _status_t
     SGX_ERROR_OUT_OF_MEMORY      = SGX_MK_ERROR(0x0003),      /* Not enough memory is available to complete this operation */
     SGX_ERROR_ENCLAVE_LOST       = SGX_MK_ERROR(0x0004),      /* Enclave lost after power transition or used in child process created by linux:fork() */
     SGX_ERROR_INVALID_STATE      = SGX_MK_ERROR(0x0005),      /* SGX API is invoked in incorrect order or state */
+    SGX_ERROR_FEATURE_NOT_SUPPORTED = SGX_MK_ERROR(0x0008),   /* Feature is not supported on this platform */
+    SGX_PTHREAD_EXIT             = SGX_MK_ERROR(0x0009),      /* Enclave is exited with pthread_exit() */
+    SGX_ERROR_MEMORY_MAP_FAILURE = SGX_MK_ERROR(0x000a),      /* Failed to reserve memory for the enclave */
 
     SGX_ERROR_INVALID_FUNCTION   = SGX_MK_ERROR(0x1001),      /* The ecall/ocall index is invalid */
     SGX_ERROR_OUT_OF_TCS         = SGX_MK_ERROR(0x1003),      /* The enclave is out of TCS */
@@ -58,16 +61,17 @@ typedef enum _status_t
     SGX_ERROR_NDEBUG_ENCLAVE     = SGX_MK_ERROR(0x2004),      /* The enclave is signed as product enclave, and can not be created as debuggable enclave. */
     SGX_ERROR_OUT_OF_EPC         = SGX_MK_ERROR(0x2005),      /* Not enough EPC is available to load the enclave */
     SGX_ERROR_NO_DEVICE          = SGX_MK_ERROR(0x2006),      /* Can't open SGX device */
-    SGX_ERROR_MEMORY_MAP_CONFLICT= SGX_MK_ERROR(0x2007),      /* Page mapping failed in driver */
+    SGX_ERROR_MEMORY_MAP_CONFLICT= SGX_MK_ERROR(0x2007),      /* Page mapping failed in driver. Deprecated */
     SGX_ERROR_INVALID_METADATA   = SGX_MK_ERROR(0x2009),      /* The metadata is incorrect. */
     SGX_ERROR_DEVICE_BUSY        = SGX_MK_ERROR(0x200c),      /* Device is busy, mostly EINIT failed. */
     SGX_ERROR_INVALID_VERSION    = SGX_MK_ERROR(0x200d),      /* Metadata version is inconsistent between uRTS and sgx_sign or uRTS is incompatible with current platform. */
     SGX_ERROR_MODE_INCOMPATIBLE  = SGX_MK_ERROR(0x200e),      /* The target enclave 32/64 bit mode or sim/hw mode is incompatible with the mode of current uRTS. */
     SGX_ERROR_ENCLAVE_FILE_ACCESS = SGX_MK_ERROR(0x200f),     /* Can't open enclave file. */
     SGX_ERROR_INVALID_MISC        = SGX_MK_ERROR(0x2010),     /* The MiscSelct/MiscMask settings are not correct.*/
+    SGX_ERROR_INVALID_LAUNCH_TOKEN = SGX_MK_ERROR(0x2011),    /* The launch token is not correct.*/
 
     SGX_ERROR_MAC_MISMATCH       = SGX_MK_ERROR(0x3001),      /* Indicates verification error for reports, sealed datas, etc */
-    SGX_ERROR_INVALID_ATTRIBUTE  = SGX_MK_ERROR(0x3002),      /* The enclave is not authorized */
+    SGX_ERROR_INVALID_ATTRIBUTE  = SGX_MK_ERROR(0x3002),      /* The enclave is not authorized, e.g., requesting invalid attribute or launch key access on legacy SGX platform without FLC  */
     SGX_ERROR_INVALID_CPUSVN     = SGX_MK_ERROR(0x3003),      /* The cpu svn is beyond platform's cpu svn value */
     SGX_ERROR_INVALID_ISVSVN     = SGX_MK_ERROR(0x3004),      /* The isv svn is greater than the enclave's isv svn */
     SGX_ERROR_INVALID_KEYNAME    = SGX_MK_ERROR(0x3005),      /* The key name is an unsupported value */
@@ -75,18 +79,28 @@ typedef enum _status_t
     SGX_ERROR_SERVICE_UNAVAILABLE       = SGX_MK_ERROR(0x4001),   /* Indicates aesm didn't respond or the requested service is not supported */
     SGX_ERROR_SERVICE_TIMEOUT           = SGX_MK_ERROR(0x4002),   /* The request to aesm timed out */
     SGX_ERROR_AE_INVALID_EPIDBLOB       = SGX_MK_ERROR(0x4003),   /* Indicates epid blob verification error */
-    SGX_ERROR_SERVICE_INVALID_PRIVILEGE = SGX_MK_ERROR(0x4004),   /* Enclave has no privilege to get launch token */
+    SGX_ERROR_SERVICE_INVALID_PRIVILEGE = SGX_MK_ERROR(0x4004),   /*  Enclave not authorized to run, .e.g. provisioning enclave hosted in an app without access rights to /dev/sgx_provision */
     SGX_ERROR_EPID_MEMBER_REVOKED       = SGX_MK_ERROR(0x4005),   /* The EPID group membership is revoked. */
     SGX_ERROR_UPDATE_NEEDED             = SGX_MK_ERROR(0x4006),   /* SGX needs to be updated */
     SGX_ERROR_NETWORK_FAILURE           = SGX_MK_ERROR(0x4007),   /* Network connecting or proxy setting issue is encountered */
     SGX_ERROR_AE_SESSION_INVALID        = SGX_MK_ERROR(0x4008),   /* Session is invalid or ended by server */
-    SGX_ERROR_BUSY                      = SGX_MK_ERROR(0x400a),   /* The requested service is temporarily not availabe */
+    SGX_ERROR_BUSY                      = SGX_MK_ERROR(0x400a),   /* The requested service is temporarily not available */
     SGX_ERROR_MC_NOT_FOUND              = SGX_MK_ERROR(0x400c),   /* The Monotonic Counter doesn't exist or has been invalided */
     SGX_ERROR_MC_NO_ACCESS_RIGHT        = SGX_MK_ERROR(0x400d),   /* Caller doesn't have the access right to specified VMC */
     SGX_ERROR_MC_USED_UP                = SGX_MK_ERROR(0x400e),   /* Monotonic counters are used out */
     SGX_ERROR_MC_OVER_QUOTA             = SGX_MK_ERROR(0x400f),   /* Monotonic counters exceeds quota limitation */
     SGX_ERROR_KDF_MISMATCH              = SGX_MK_ERROR(0x4011),   /* Key derivation function doesn't match during key exchange */
     SGX_ERROR_UNRECOGNIZED_PLATFORM     = SGX_MK_ERROR(0x4012),   /* EPID Provisioning failed due to platform not recognized by backend server*/
+    SGX_ERROR_UNSUPPORTED_CONFIG        = SGX_MK_ERROR(0x4013),   /* The config for trigging EPID Provisiong or PSE Provisiong&LTP is invalid*/
+
+    SGX_ERROR_NO_PRIVILEGE              = SGX_MK_ERROR(0x5002),   /* Not enough privilege to perform the operation */
+
+    /* SGX Protected Code Loader Error codes*/
+    SGX_ERROR_PCL_ENCRYPTED             = SGX_MK_ERROR(0x6001),   /* trying to encrypt an already encrypted enclave */
+    SGX_ERROR_PCL_NOT_ENCRYPTED         = SGX_MK_ERROR(0x6002),   /* trying to load a plain enclave using sgx_create_encrypted_enclave */
+    SGX_ERROR_PCL_MAC_MISMATCH          = SGX_MK_ERROR(0x6003),   /* section mac result does not match build time mac */
+    SGX_ERROR_PCL_SHA_MISMATCH          = SGX_MK_ERROR(0x6004),   /* Unsealed key MAC does not match MAC of key hardcoded in enclave binary */
+    SGX_ERROR_PCL_GUID_MISMATCH         = SGX_MK_ERROR(0x6005),   /* GUID in sealed blob does not match GUID hardcoded in enclave binary */
     
     /* SGX errors are only used in the file API when there is no appropriate EXXX (EINVAL, EIO etc.) error code */
     SGX_ERROR_FILE_BAD_STATUS               = SGX_MK_ERROR(0x7001),	/* The file is in bad status, run sgx_clearerr to try and fix it */
@@ -98,6 +112,16 @@ typedef enum _status_t
     SGX_ERROR_FILE_RECOVERY_NEEDED          = SGX_MK_ERROR(0x7007),	/* When openeing the file, recovery is needed, but the recovery process failed */
     SGX_ERROR_FILE_FLUSH_FAILED             = SGX_MK_ERROR(0x7008),	/* fflush operation (to disk) failed (only used when no EXXX is returned) */
     SGX_ERROR_FILE_CLOSE_FAILED             = SGX_MK_ERROR(0x7009),	/* fclose operation (to disk) failed (only used when no EXXX is returned) */
+
+
+    SGX_ERROR_UNSUPPORTED_ATT_KEY_ID        = SGX_MK_ERROR(0x8001),    /* platform quoting infrastructure does not support the key.*/
+    SGX_ERROR_ATT_KEY_CERTIFICATION_FAILURE = SGX_MK_ERROR(0x8002),    /* Failed to generate and certify the attestation key.*/
+    SGX_ERROR_ATT_KEY_UNINITIALIZED         = SGX_MK_ERROR(0x8003),    /* The platform quoting infrastructure does not have the attestation key available to generate quote.*/
+    SGX_ERROR_INVALID_ATT_KEY_CERT_DATA     = SGX_MK_ERROR(0x8004),    /* TThe data returned by the platform library's sgx_get_quote_config() is invalid.*/
+    SGX_ERROR_PLATFORM_CERT_UNAVAILABLE     = SGX_MK_ERROR(0x8005),    /* The PCK Cert for the platform is not available.*/
+
+    SGX_ERROR_TLS_X509_INVALID_EXTENSION   = SGX_MK_ERROR(0x9001),    /* error of RA-TLS x509 invalid extension */
+    SGX_INTERNAL_ERROR_ENCLAVE_CREATE_INTERRUPTED = SGX_MK_ERROR(0xF001), /* The ioctl for enclave_create unexpectedly failed with EINTR. */ 
 
 } sgx_status_t;
 

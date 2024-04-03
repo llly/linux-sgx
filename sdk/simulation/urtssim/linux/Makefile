@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -31,6 +31,8 @@
 
 include ../../../../buildenv.mk
 
+URTS_VER:= $(shell awk '$$2 ~ /URTS_VERSION/ { print substr($$3, 2, length($$3) - 2); }' $(COMMON_DIR)/inc/internal/se_version.h)
+
 SIM_DIR := $(LINUX_SDK_DIR)/simulation
 VTUNE_DIR = $(LINUX_EXTERNAL_DIR)/vtune/linux
 
@@ -39,16 +41,21 @@ CXXFLAGS += -DDISABLE_TRACE
 CFLAGS += -DDISABLE_TRACE
 endif
 
-CXXFLAGS += -fPIC -DSE_SIM -Werror -g
-CFLAGS   += -fPIC -DSE_SIM -Werror -g
+CXXFLAGS += -fPIC -DSE_SIM -Werror -g $(CET_FLAGS)
+CFLAGS   += -fPIC -DSE_SIM -Werror -g $(CET_FLAGS)
+
+PREBUILT_OPENSSL_DIR := $(LINUX_EXTERNAL_DIR)/dcap_source/prebuilt/openssl
+CRYPTO_LIB := -L$(PREBUILT_OPENSSL_DIR)/lib/linux64 -lcrypto
 
 CPPFLAGS += $(ADDED_INC) #for ubuntu 11 and later version
 CPPFLAGS += -I$(COMMON_DIR)/inc                \
             -I$(COMMON_DIR)/inc/internal/linux \
+            -I$(LINUX_PSW_DIR)/enclave_common  \
             -I$(LINUX_PSW_DIR)/urts            \
             -I$(LINUX_PSW_DIR)/urts/parser     \
             -I$(VTUNE_DIR)/include \
-            -I$(VTUNE_DIR)/sdk/src/ittnotify
+            -I$(VTUNE_DIR)/sdk/src/ittnotify \
+            -I$(PREBUILT_OPENSSL_DIR)/inc
 
 CPPFLAGS += -I$(COMMON_DIR)/inc/internal      \
             -I$(LINUX_PSW_DIR)/urts/linux     \
@@ -59,21 +66,25 @@ DIR1 := $(LINUX_PSW_DIR)/urts/
 DIR2 := $(LINUX_PSW_DIR)/urts/linux/
 DIR3 := $(LINUX_PSW_DIR)/urts/parser/
 DIR4 := ../
+DIR5 := $(LINUX_PSW_DIR)/../common/src/linux
+DIR6 := $(LINUX_PSW_DIR)/../common/src
+
 
 LDFLAGS += -L$(COMMON_DIR)/se_wrapper \
            -L$(SIM_DIR)/uae_service_sim/linux
-
-LDFLAGS += -L$(VTUNE_DIR)/sdk/src/ittnotify/ -littnotify -ldl
+LDFLAGS += -L$(VTUNE_DIR)/sdk/src/ittnotify/ -littnotify -ldl -lpthread
 
 OBJ1 := enclave.o         \
         tcs.o             \
         loader.o          \
         se_detect.o       \
         enclave_mutex.o   \
+        enclave_thread.o  \
         routine.o         \
         urts_xsave.o      \
         se_ocalls.o       \
         cpu_features.o    \
+        cpu_features_ext.o    \
         node.o            \
         launch_checker.o 
 
@@ -81,37 +92,43 @@ OBJ2 := urts.o             \
         misc.o             \
         sig_handler.o      \
         debugger_support.o \
-        get_thread_id.o
+        get_thread_id.o    \
+        urts_emm.o
 
 OBJ3 := section.o \
         elfparser.o
 
-OBJ4 := enter_enclave.o
+OBJ4 := enter_enclave.o \
+        xsave_gnu.o
 
 OBJ5 := enclave_creator_sim.o \
-        cpusvn_util.o
+        cpusvn_util.o         \
+        crypto_evp_digest.o
 
 OBJ6 := $(SIM_DIR)/driver_api/driver_api.o \
         $(SIM_DIR)/assembly/linux/lowlib.o \
         $(SIM_DIR)/assembly/linux/sgxsim.o \
         $(SIM_DIR)/uinst/u_instructions.o  \
         $(SIM_DIR)/uinst/enclave_mngr.o    \
+        $(SIM_DIR)/uinst/linux/get_tcs.o   \
         $(SIM_DIR)/uinst/linux/set_tls.o   \
         $(SIM_DIR)/uinst/linux/restore_tls.o
 
+		
 CPP_OBJ := $(OBJ1) $(OBJ2) $(OBJ3) $(OBJ5)
-OBJ     := $(CPP_OBJ) $(OBJ4)
+OBJ     := $(CPP_OBJ) $(C_OBJ) $(OBJ4)
 
-vpath %.cpp .:$(DIR1):$(DIR2):$(DIR3):$(DIR4)
+vpath %.cpp .:$(DIR1):$(DIR2):$(DIR3):$(DIR4):$(DIR6)
+vpath %.S   .:$(DIR2):$(DIR5)
+vpath %.c .:$(DIR6)
 
-LDFLAGS +=  -L$(IPP_LIBS_DIR)
-LDFLAGS += -Wl,--version-script=$(LINUX_PSW_DIR)/urts/linux/urts.lds
+LDFLAGS += $(COMMON_LDFLAGS) -Wl,--version-script=$(LINUX_PSW_DIR)/urts/linux/urts.lds
 
 LIBURTSSIM_SHARED := libsgx_urts_sim.so
 LIBURTSSIM_DEBUG := libsgx_urts_sim.so.debug
 LIBURTS_DEPLOY := libsgx_urts_deploy.so
 
-LDLIBS  += -lwrapper $(LD_IPP) -Wl,-Bdynamic -Wl,-Bsymbolic -lsgx_uae_service_sim
+LDLIBS  += -lwrapper $(CRYPTO_LIB) -Wl,-Bdynamic -Wl,-Bsymbolic -lsgx_uae_service_sim
 SONAME = $(LIBURTSSIM_SHARED)
 
 .PHONY: all
@@ -122,16 +139,8 @@ ifndef DEBUG
 	$(CP) $(LIBURTSSIM_DEBUG) $|
 endif
 
-ifneq ($(USE_OPT_LIBS), 0)
 $(LIBURTSSIM_SHARED): simasm uinst driver_api wrapper uae_service_sim $(OBJ) $(OBJ6) ittnotify
 	$(CXX) $(CXXFLAGS) -shared -Wl,-soname=$(SONAME) $(OBJ) $(OBJ6) $(LDFLAGS) $(LDLIBS) -o $@
-else
--lcrypto_px:
-	$(MAKE) -C $(IPP_LIBS_DIR)
-
-$(LIBURTSSIM_SHARED): simasm uinst driver_api wrapper uae_service_sim $(OBJ) $(OBJ6) -lcrypto_px ittnotify
-	$(CXX) $(CXXFLAGS) -shared -Wl,-soname=$(SONAME) $(OBJ) $(OBJ6) $(LDFLAGS) $(LDLIBS) -o $@
-endif
 
 $(LIBURTSSIM_DEBUG): $(LIBURTSSIM_SHARED)
 ifndef DEBUG
@@ -144,7 +153,9 @@ endif
 $(BUILD_DIR):
 	@$(MKDIR) $@
 
-$(OBJ4): %.o: $(DIR2)/%.S
+$(OBJ6): | uinst simasm driver_api
+
+$(OBJ4): %.o: %.S
 	$(CC) -c $(CFLAGS) $(CPPFLAGS) $< -o $@
 
 $(CPP_OBJ): %.o: %.cpp
@@ -172,10 +183,10 @@ uae_service_sim:
 
 .PHONY: ittnotify
 ittnotify:
-	$(MAKE) -C $(VTUNE_DIR)/sdk/src/ittnotify/
+	CFLAGS= CXXFLAGS= $(MAKE) -C $(VTUNE_DIR)/sdk/src/ittnotify/
 
 $(LIBURTS_DEPLOY):../urts_deploy.c
-	 $(CC) -I$(COMMON_DIR)/inc -shared -fPIC -Wl,-soname=libsgx_urts.so $< -o $@
+	 $(CC) -I$(COMMON_DIR)/inc $(CET_FLAGS) -shared -fPIC -Wl,-soname=libsgx_urts.so.$(call SPLIT_VERSION,$(URTS_VER),1) $< -o $@
 
 .PHONY: clean
 clean::
@@ -186,7 +197,4 @@ clean::
 	$(MAKE) -C $(SIM_DIR)/assembly/                                        clean
 	$(MAKE) -C $(SIM_DIR)/uinst/                                           clean
 	$(MAKE) -C $(SIM_DIR)/uae_service_sim/linux                            clean
-ifeq ($(USE_OPT_LIBS), 0)
-	$(MAKE) -C $(IPP_LIBS_DIR)                                              clean
-endif
 	$(MAKE) -C $(VTUNE_DIR)/sdk/src/ittnotify/                             clean

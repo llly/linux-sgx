@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -34,7 +34,9 @@ include ../../../../buildenv.mk
 CPPFLAGS += -I$(COMMON_DIR)/inc/         \
             -I$(COMMON_DIR)/inc/tlibc/   \
             -I$(COMMON_DIR)/inc/internal \
-            -I$(LINUX_SDK_DIR)/trts/
+            -I$(LINUX_SDK_DIR)/trts/     \
+            -I$(LINUX_SDK_DIR)/pthread/  \
+            -I$(LINUX_SDK_DIR)/tlibcxx/include
 
 CFLAGS   += $(ENCLAVE_CFLAGS)
 ASFLAGS  := -DSE_SIM -Werror $(CFLAGS)
@@ -53,8 +55,8 @@ LOWLIB_DIR := $(SIM_DIR)/assembly/linux/
 TLS_DIR    := $(SIM_DIR)/uinst/linux/
 # The source for trusted loader
 TLDR_DIR   := $(LINUX_SDK_DIR)/trts/linux/
-# Support for platform dependent 'setcontext'
-SC_DIR     := $(LINUX_SDK_DIR)/trts/linux/$(ARCH)/
+# The source for xsave/xrstor
+XSAVE_DIR     := $(COMMON_DIR)/src/linux/
 
 TRTS1_OBJS  := init_enclave.o \
                trts.o         \
@@ -63,7 +65,10 @@ TRTS1_OBJS  := init_enclave.o \
                trts_util.o    \
                trts_veh.o     \
                trts_xsave.o   \
-               init_optimized_lib.o
+               init_optimized_lib.o \
+               trts_add_trim.o \
+               trts_emm_sim.o
+
 TRTS2_OBJS  := trts_nsp.o
 TRTS_OBJS := $(TRTS1_OBJS) $(TRTS2_OBJS)
 
@@ -76,7 +81,9 @@ TLS_OBJS     := get_tcs.o \
                 restore_tls.o
 
 TLDR_ASM_OBJS := trts_pic.o \
-                metadata_sec.o
+                metadata_sec.o \
+                xsave_gnu.o \
+                thunk.o
 
 TLDR_C_OBJS  := elf_parser.o  \
                 global_init.o \
@@ -84,12 +91,10 @@ TLDR_C_OBJS  := elf_parser.o  \
 
 TLDR_OBJS := $(TLDR_ASM_OBJS) $(TLDR_C_OBJS)
 
-SC_OBJ := setcontext.o
-
 LIBTRTS := libsgx_trts_sim.a
 
 vpath %.cpp $(TRTS_DIR):$(TINST_DIR)
-vpath %.S   $(LOWLIB_DIR):$(TLDR_DIR):$(SC_DIR)
+vpath %.S   $(LOWLIB_DIR):$(TLDR_DIR):$(XSAVE_DIR)
 vpath %.c   $(TLS_DIR):$(TLDR_DIR)
 
 # ------------------------------------------------------------
@@ -97,8 +102,8 @@ vpath %.c   $(TLS_DIR):$(TLDR_DIR)
 all: $(LIBTRTS) | $(BUILD_DIR)
 	$(CP) $< $|
 
-$(LIBTRTS): $(TRTS_OBJS) $(TINST_OBJS) $(LOWLIB_OBJS) $(TLS_OBJS) $(TLDR_OBJS) $(SC_OBJ) 
-	$(AR) rcsD $@ $(TRTS_OBJS) $(TINST_OBJS) $(LOWLIB_OBJS) $(TLS_OBJS) $(TLDR_OBJS) $(SC_OBJ)
+$(LIBTRTS): $(TRTS_OBJS) $(TINST_OBJS) $(LOWLIB_OBJS) $(TLS_OBJS) $(TLDR_OBJS) 
+	$(AR) rcsD $@ $(TRTS_OBJS) $(TINST_OBJS) $(LOWLIB_OBJS) $(TLS_OBJS) $(TLDR_OBJS)
 
 # ------------------------------------------------------------
 $(TRTS1_OBJS):    CPPFLAGS += -I$(COMMON_DIR)/inc/tlibc \
@@ -124,8 +129,6 @@ $(TLDR_C_OBJS):  CPPFLAGS += -I$(COMMON_DIR)/inc/internal/linux/ \
                              -I$(SIM_DIR)/assembly/
 
 $(TLDR_ASM_OBJS): ASFLAGS += -I$(SIM_DIR)/assembly/
-
-$(SC_OBJ):       ASFLAGS += -I$(LINUX_SDK_DIR)/cpprt/linux/libunwind/src/$(ARCH) -DISE=1
 
 $(BUILD_DIR):
 	$(MKDIR) $@

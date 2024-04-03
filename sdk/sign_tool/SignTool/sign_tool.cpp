@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,37 +33,42 @@
 // SignTool.cpp : Defines the entry point for the console application.
 //
 
-/** 
-* File: 
+/**
+* File:
 *     sign_tool.cpp
-*Description: 
+*Description:
 *     Defines the entry point for the application.
-* 
+*
 */
 
-#include "ippcp.h"
-#include "ippcore.h"
+#include <openssl/bio.h>
+#include <openssl/bn.h>
+#include <openssl/sha.h>
+#include <openssl/rsa.h>
+#include <openssl/evp.h>
+#include <openssl/err.h>
+#include <openssl/crypto.h>
 
 #include "metadata.h"
 #include "manage_metadata.h"
-#include "ipp_wrapper.h"
 #include "parse_key_file.h"
 #include "enclave_creator_sign.h"
 #include "util_st.h"
 
 #include "se_trace.h"
 #include "sgx_error.h"
+#include "se_version.h"
 
 #include "se_map.h"
 #include "loader.h"
 #include "parserfactory.h"
 #include "elf_helper.h"
+#include "crypto_wrapper.h"
 
 #include <unistd.h>
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <time.h>
 #include <assert.h>
 
 #include <string>
@@ -71,15 +76,13 @@
 #include <sstream>
 
 #define SIGNATURE_SIZE 384
+#define REL_ERROR_BIT         0x1
+#define INIT_SEC_ERROR_BIT    0x2
+#define RESIGN_BIT            0x4
 
-typedef enum _command_mode_t
-{
-    SIGN = 0,
-    GENDATA,
-    CATSIG,
-    COMPARE,
-    DUMP
-} command_mode_t;
+#define IGNORE_REL_ERROR(x)        (((x) & REL_ERROR_BIT) != 0)
+#define IGNORE_INIT_SEC_ERROR(x)   (((x) & INIT_SEC_ERROR_BIT) != 0)
+#define ENABLE_RESIGN(x)           (((x) & RESIGN_BIT) != 0)
 
 typedef enum _file_path_t
 {
@@ -89,32 +92,17 @@ typedef enum _file_path_t
     OUTPUT,
     SIG,
     UNSIGNED,
-    REVIEW_ENCLAVE,
-    DUMPFILE
+    DUMPFILE,
+    CSSFILE
 } file_path_t;
 
-static bool get_time(uint32_t *date)
-{
-    assert(date != NULL);
-
-    time_t rawtime = 0;
-    if(time( &rawtime) == -1)
-        return false;
-    struct tm *timeinfo = gmtime(&rawtime);
-    if(timeinfo  == NULL)
-        return false;
-    uint32_t tmp_date = (timeinfo->tm_year+1900)*10000 + (timeinfo->tm_mon+1)*100 + timeinfo->tm_mday;
-    stringstream ss;
-    ss<<"0x"<<tmp_date;
-    ss>>hex>>tmp_date;
-    *date = tmp_date;
-    return true;
-}
 
 static int load_enclave(BinParser *parser, metadata_t *metadata)
 {
     std::unique_ptr<CLoader> ploader(new CLoader(const_cast<uint8_t *>(parser->get_start_addr()), *parser));
-    return ploader->load_enclave_ex(NULL, 0, metadata, NULL);
+    int ret = ploader->load_enclave_ex(NULL, 0, metadata, NULL,  0, NULL);
+    delete parser;
+    return ret;
 }
 
 
@@ -122,11 +110,7 @@ static int load_enclave(BinParser *parser, metadata_t *metadata)
 
 static int open_file(const char* dllpath)
 {
-    FILE *fp = fopen(dllpath, "rb");
-    if (fp == NULL)
-    return THE_INVALID_HANDLE;
-
-    return fileno(fp);
+    return open(dllpath, O_RDONLY);  
 }
 
 static void close_handle(int fd)
@@ -135,13 +119,13 @@ static void close_handle(int fd)
 }
 
 
-static bool get_enclave_info(BinParser *parser, bin_fmt_t *bf, uint64_t * meta_offset, bool is_dump_mode = false)
+static bool get_enclave_info(BinParser *parser, bin_fmt_t *bf, uint64_t * meta_offset, bool is_dump_mode = false, bool resign_flag = false)
 {
     uint64_t meta_rva = parser->get_metadata_offset();
     const uint8_t *base_addr = parser->get_start_addr();
     metadata_t *metadata = GET_PTR(metadata_t, base_addr, meta_rva);
 
-    if(metadata->magic_num == METADATA_MAGIC && is_dump_mode == false)
+    if(metadata->magic_num == METADATA_MAGIC && is_dump_mode == false && resign_flag == false)
     {
         se_trace(SE_TRACE_ERROR, ENCLAVE_ALREADY_SIGNED_ERROR);
         return false;
@@ -155,12 +139,13 @@ static bool get_enclave_info(BinParser *parser, bin_fmt_t *bf, uint64_t * meta_o
 // measure_enclave():
 //    1. Get the enclave hash by loading enclave
 //    2. Get the enclave info - metadata offset and enclave file format
-static bool measure_enclave(uint8_t *hash, const char *dllpath, const xml_parameter_t *parameter, bool ignore_rel_error, metadata_t *metadata, bin_fmt_t *bin_fmt, uint64_t *meta_offset)
+static bool measure_enclave(uint8_t *hash, const char *dllpath, const xml_parameter_t *parameter, uint32_t option_flag_bits, metadata_t *metadata, uint64_t *meta_offset, uint8_t *meta_versions)
 {
-    assert(hash && dllpath && metadata && bin_fmt && meta_offset);
+    assert(hash && dllpath && metadata && meta_offset && meta_versions);
     bool res = false;
-    uint32_t file_size = 0;
+    off_t file_size = 0;
     uint64_t quota = 0;
+    bin_fmt_t bin_fmt = BF_UNKNOWN;
 
     se_file_handle_t fh = open_file(dllpath);
     if (fh == THE_INVALID_HANDLE)
@@ -187,6 +172,12 @@ static bool measure_enclave(uint8_t *hash, const char *dllpath, const xml_parame
         close_handle(fh);
         return false;
     }
+    if(parser->has_init_section() && IGNORE_INIT_SEC_ERROR(option_flag_bits) == false)
+    {
+        se_trace(SE_TRACE_ERROR, INIT_SEC_ERROR);
+        close_handle(fh);
+        return false;
+    }
 
     // generate metadata
     CMetadata meta(metadata, parser.get());
@@ -196,22 +187,25 @@ static bool measure_enclave(uint8_t *hash, const char *dllpath, const xml_parame
         return false;
     }
 
+    // get the versions of metadata we need to output
+    *meta_versions = meta.get_meta_versions();
+
     // Collect enclave info
-    if(get_enclave_info(parser.get(), bin_fmt, meta_offset) == false)
+    if(get_enclave_info(parser.get(), &bin_fmt, meta_offset, false, ENABLE_RESIGN(option_flag_bits)) == false)
     {
         close_handle(fh);
         return false;
     }
     bool no_rel = false;
-    if (*bin_fmt == BF_ELF64)
+    if (bin_fmt == BF_ELF64)
     {
         no_rel = ElfHelper<64>::dump_textrels(parser.get());
     }
     else
-    {	
+    {
         no_rel = ElfHelper<32>::dump_textrels(parser.get());
     }
-    if(no_rel == false && ignore_rel_error == false)
+    if(no_rel == false && (IGNORE_REL_ERROR(option_flag_bits) == false))
     {
         close_handle(fh);
         se_trace(SE_TRACE_ERROR, TEXT_REL_ERROR);
@@ -237,13 +231,15 @@ static bool measure_enclave(uint8_t *hash, const char *dllpath, const xml_parame
         res = false;
         break;
     case SGX_SUCCESS:
-        ret = dynamic_cast<EnclaveCreatorST*>(get_enclave_creator())->get_enclave_info(hash, SGX_HASH_SIZE, &quota);
+        ret = static_cast<EnclaveCreatorST*>(get_enclave_creator())->get_enclave_info(hash, SGX_HASH_SIZE, &quota);
         if(ret != SGX_SUCCESS)
         {
             res = false;
             break;
         }
+        SE_TRACE_DEBUG("\n");
         se_trace(SE_TRACE_ERROR, REQUIRED_ENCLAVE_SIZE, quota);
+        se_trace(SE_TRACE_ERROR, "The required memory is 0x%llx, %llu KB.\n", quota, quota/1024);
         res = true;
         break;
     default:
@@ -254,121 +250,79 @@ static bool measure_enclave(uint8_t *hash, const char *dllpath, const xml_parame
     return res;
 }
 
-static void set_meta_attributes(metadata_t *meta)
-{
-    assert(meta != NULL);
-    //set metadata.attributes
-    //low 64 bit: it's the same as enclave_css
-    memset(&meta->attributes, 0, sizeof(sgx_attributes_t));
-    meta->attributes.flags = meta->enclave_css.body.attributes.flags; 
-    //high 64 bit
-    //set bits that will not be checked
-    meta->attributes.xfrm = ~meta->enclave_css.body.attribute_mask.xfrm;
-    //set bits that have been set '1' and need to be checked
-    meta->attributes.xfrm |= (meta->enclave_css.body.attributes.xfrm & meta->enclave_css.body.attribute_mask.xfrm);
-    return;
-}
 
 //fill_enclave_css()
-//       file the enclave_css_t structure with the parameter, enclave_hash
-//       If the RSA_key is not null, fill the key part
-//       If RSA_key == NULL, fill the header and body(GENDATA mode)
+//       fill the enclave_css_t structure with enclave_hash
+//       If the 'rsa' is not null, fill the key part
 //       If the path[UNSIGNED] != NULL, update the header.date(CATSIG mode)
-static bool fill_enclave_css(const IppsRSAPublicKeyState *pub_key, const xml_parameter_t *para, const uint8_t *enclave_hash, 
-                             const char **path, enclave_css_t *css, bin_fmt_t bf)
+static bool fill_enclave_css(const EVP_PKEY *pkey, const char **path, 
+                             const uint8_t *enclave_hash, enclave_css_t *css)
 {
-    assert(para != NULL && enclave_hash != NULL && path != NULL && css != NULL);
+    assert(enclave_hash != NULL && path != NULL && css != NULL);
 
-    enclave_css_t enclave_css;
-    memset(&enclave_css, 0, sizeof(enclave_css_t));
-
-    uint32_t date = 0;
-    if(false == get_time(&date))
-        return false;
-
-    //*****fill the header*******************
-    uint8_t header[12] = {6, 0, 0, 0, 0xE1, 0, 0, 0, 0, 0, 1, 0};
-    uint8_t header2[16] = {1, 1, 0, 0, 0x60, 0, 0, 0, 0x60, 0, 0, 0, 1, 0, 0, 0};
-    memcpy_s(&enclave_css.header.header, sizeof(enclave_css.header.header), &header, sizeof(header));
-    memcpy_s(&enclave_css.header.header2, sizeof(enclave_css.header.header2), &header2, sizeof(header2));
-
-    // For 'type', signing tool clears the bit 31 for product enclaves 
-    // and set the bit 31 for debug enclaves
-    enclave_css.header.type = (para[RELEASETYPE].value & 0x01) ? (1<<31) : 0;
-    enclave_css.header.module_vendor = (para[INTELSIGNED].value&0x01) ? 0x8086 : 0;
-    enclave_css.header.date = date;
-
-    //if pub_key is not NULL, fill the key part
-    if(pub_key)
+    //if pkey is not NULL, fill the public key part
+    if(pkey)
     {
-        int exponent_size = 0;
-        int modulus_size = 0;
-        IppStatus error_code = get_pub_key(pub_key, &exponent_size, 
-            (Ipp32u *)&enclave_css.key.exponent, 
-            &modulus_size, 
-            (Ipp32u *)&enclave_css.key.modulus);
-        if(error_code != ippStsNoErr)
+        BIGNUM *e = NULL, *n = NULL;
+        rsa_get_bn((EVP_PKEY*)pkey, &n, &e, NULL);
+        //RSA_get0_key(rsa, &n, &e, NULL);
+        int exponent_size = BN_num_bytes(e);
+        int modulus_size = BN_num_bytes(n);
+
+        if(modulus_size > SE_KEY_SIZE)
         {
+            rsa_free_bn(n, e, NULL);
             return false;
         }
-        exponent_size = (uint32_t)(ROUND_TO(exponent_size, sizeof(Ipp32u)) / sizeof(Ipp32u));
-        modulus_size = (uint32_t)(ROUND_TO(modulus_size, sizeof(Ipp32u)) / sizeof(Ipp32u));
-        assert(enclave_css.key.exponent[0] == 0x03);
-        assert(exponent_size == 0x1);
-        assert(modulus_size == 0x60);
+        unsigned char *modulus = (unsigned char *)malloc(SE_KEY_SIZE);
+        if(modulus == NULL)
+        {rsa_free_bn(n, e, NULL);
+            return false;
+        }
+        memset(modulus, 0, SE_KEY_SIZE);
+
+        exponent_size = (uint32_t)(ROUND_TO(exponent_size, sizeof(uint32_t)) / sizeof(uint32_t));
+        modulus_size = (uint32_t)(ROUND_TO(modulus_size, sizeof(uint32_t)) / sizeof(uint32_t));
+        if(exponent_size != 0x1 || modulus_size != 0x60)
+        {
+            rsa_free_bn(n, e, NULL);
+            free(modulus);
+            return false;
+        }
+        if(BN_bn2bin(n, modulus) != SE_KEY_SIZE)
+        {
+            rsa_free_bn(n, e, NULL);
+            free(modulus);
+            return false;
+        }
+        if(BN_bn2bin(e, (unsigned char *)&css->key.exponent) != 1)
+        {
+            rsa_free_bn(n, e, NULL);
+            free(modulus);
+            return false;
+        }
+        rsa_free_bn(n, e, NULL);
+        for(unsigned int i = 0; i < SE_KEY_SIZE; i++)
+        {
+            css->key.modulus[i] = modulus[SE_KEY_SIZE -i - 1];
+        }
+        free(modulus);
+        assert(css->key.exponent[0] == 0x03);
     }
 
-    //hardware version
-    enclave_css.header.hw_version = (uint32_t)para[HW].value;
-
-    //****************************fill the body***********************
-    // Misc_select/Misc_mask
-    enclave_css.body.misc_select = (uint32_t)para[MISCSELECT].value;
-    enclave_css.body.misc_mask = (uint32_t)para[MISCMASK].value;
-    //low 64 bit
-    enclave_css.body.attributes.flags = 0;
-    enclave_css.body.attribute_mask.flags = ~SGX_FLAGS_DEBUG;
-    if(para[DISABLEDEBUG].value == 1)
-    {
-        enclave_css.body.attributes.flags &=  ~SGX_FLAGS_DEBUG;
-        enclave_css.body.attribute_mask.flags |= SGX_FLAGS_DEBUG;
-    }
-    if(para[PROVISIONKEY].value == 1)
-    {
-        enclave_css.body.attributes.flags |= SGX_FLAGS_PROVISION_KEY;
-        enclave_css.body.attribute_mask.flags |= SGX_FLAGS_PROVISION_KEY;
-    }
-    if(para[LAUNCHKEY].value == 1)
-    {
-        enclave_css.body.attributes.flags |= SGX_FLAGS_EINITTOKEN_KEY;
-        enclave_css.body.attribute_mask.flags |= SGX_FLAGS_EINITTOKEN_KEY;
-    }
-    if(bf == BF_PE64 || bf == BF_ELF64)
-    {
-        enclave_css.body.attributes.flags |= SGX_FLAGS_MODE64BIT;
-        enclave_css.body.attribute_mask.flags |= SGX_FLAGS_MODE64BIT;
-    }
-    // high 64 bit
-    //default setting
-    enclave_css.body.attributes.xfrm = SGX_XFRM_LEGACY; // SGX requires SSE and x87, so set legacy bits to be checked
-    enclave_css.body.attribute_mask.xfrm = SGX_XFRM_LEGACY | SGX_XFRM_RESERVED; // LEGACY and reserved bits would be checked.
-
-    memcpy_s(&enclave_css.body.enclave_hash, sizeof(enclave_css.body.enclave_hash), enclave_hash, SGX_HASH_SIZE);
-    enclave_css.body.isv_prod_id = (uint16_t)para[PRODID].value; 
-    enclave_css.body.isv_svn = (uint16_t)para[ISVSVN].value;
-
-    //Copy the css to output css buffer
-    memcpy_s(css, sizeof(enclave_css_t), &enclave_css, sizeof(enclave_css_t));
+    // fill the enclave hash
+    memcpy_s(&css->body.enclave_hash, sizeof(css->body.enclave_hash), enclave_hash, SGX_HASH_SIZE);
 
     if(path[UNSIGNED] != NULL)
     {
         // In catsig mode, update the header.date as the time when the unsigned file is generated.
+        enclave_css_t enclave_css;
         memset(&enclave_css, 0, sizeof(enclave_css));
         size_t fsize = get_file_size(path[UNSIGNED]);
         if(fsize != sizeof(enclave_css.header) + sizeof(enclave_css.body))
         {
-          se_trace(SE_TRACE_ERROR, UNSIGNED_FILE_ERROR, path[UNSIGNED]);
-          return false;
+            se_trace(SE_TRACE_ERROR, UNSIGNED_FILE_ERROR, path[UNSIGNED]);
+            return false;
         }
         uint8_t *buf = new uint8_t[fsize];
         memset(buf, 0, fsize);
@@ -388,124 +342,104 @@ static bool fill_enclave_css(const IppsRSAPublicKeyState *pub_key, const xml_par
             se_trace(SE_TRACE_ERROR, UNSIGNED_FILE_XML_MISMATCH);
             return false;
         }
-    }   
+    }
     return true;
 }
 
-static IppStatus calc_RSAq1q2(int length_s, const Ipp32u *data_s, int length_m, const Ipp32u *data_m, 
-    int *length_q1, Ipp32u *data_q1, int *length_q2, Ipp32u *data_q2)
+static bool calc_RSAq1q2(int length_s, const uint8_t *data_s, int length_m, const uint8_t *data_m, 
+    uint8_t *data_q1, uint8_t *data_q2)
 {
-    IppStatus error_code = ippStsSAReservedErr1;
-    IppsBigNumState *pM=0, *pS=0, *pQ1=0, *pQ2=0, *ptemp1=0, *ptemp2=0;
-    IppsBigNumSGN sgn = IppsBigNumPOS;
-    int length_in_bit = 0;
-    Ipp32u *pdata = NULL;
+    assert(data_s && data_m && data_q1 && data_q2);
+    bool ret = false;
+    BIGNUM *ptemp1=NULL, *ptemp2=NULL, *pQ1=NULL, *pQ2=NULL, *pM=NULL, *pS = NULL;
+    unsigned char *q1 = NULL, *q2= NULL;
+    BN_CTX *ctx = NULL;
 
-    //create 6 big number
+    do{
+        if((ptemp1 = BN_new()) == NULL)
+            break;
+        if((ptemp2 = BN_new()) == NULL)
+            break;
+        if((pQ1 = BN_new()) == NULL)
+            break;
+        if((pQ2 = BN_new()) == NULL)
+            break;
+        if((pM = BN_new()) == NULL)
+            break;
+        if((pS = BN_new()) == NULL)
+            break;
 
-    if(!data_s || !data_m || !length_q1 || !data_q1 || !length_q2 
-        || !data_q2 || length_s <= 0 || length_m <= 0)
-    {
-        error_code = ippStsBadArgErr;
-        goto clean_return;
-    }
+        if(BN_bin2bn((const unsigned char *)data_m, length_m, pM) == NULL)
+            break;
+        if(BN_bin2bn((const unsigned char *)data_s, length_s, pS) == NULL)
+            break;
+        if((ctx = BN_CTX_new()) == NULL)
+            break;
 
-    error_code = newBN(data_s, length_s, &pS);
-    if(error_code != ippStsNoErr)
-    {
-        goto clean_return;
-    }
-    error_code = newBN(data_m, length_m, &pM);
-    if(error_code != ippStsNoErr)
-    {
-        goto clean_return;
-    }
-    error_code = newBN(0, length_m, &pQ1);
-    if(error_code != ippStsNoErr)
-    {
-        goto clean_return;
-    }
-    error_code = newBN(0, length_m, &pQ2);
-    if(error_code != ippStsNoErr)
-    {
-        goto clean_return;
-    }
-    error_code = newBN(0, length_m*2, &ptemp1);
-    if(error_code != ippStsNoErr)
-    {
-        goto clean_return;
-    }
-    error_code = newBN(0, length_m, &ptemp2);
-    if(error_code != ippStsNoErr)
-    {
-        goto clean_return;
-    }
+        //q1 = floor(signature*signature/modulus)
+        //q2 = floor((signature*signature.signature - q1*signature*Modulus)/Modulus)
+        if(BN_mul(ptemp1, pS, pS, ctx) != 1) 
+            break; 
+        if(BN_div(pQ1, ptemp2, ptemp1, pM, ctx) !=1)
+            break;
+        if(BN_mul(ptemp1, pS, ptemp2, ctx) !=1)
+            break;
+        if(BN_div(pQ2, ptemp2, ptemp1, pM, ctx) !=1)
+            break;
 
-    //signed big number operation
-    //multiplies pS and pS, ptemp1 is the multiplication result
-    error_code = ippsMul_BN(pS, pS, ptemp1);
-    if(error_code != ippStsNoErr)
-    {
-        goto clean_return;
-    }
+        int q1_len = BN_num_bytes(pQ1);
+        int q2_len = BN_num_bytes(pQ2);
+        if((q1 = (unsigned char *)malloc(q1_len)) == NULL)
+            break;
+        if((q2 = (unsigned char *)malloc(q2_len)) == NULL)
+            break;
+        if(q1_len != BN_bn2bin(pQ1, (unsigned char *)q1))
+            break;
+        if(q2_len != BN_bn2bin(pQ2, (unsigned char *)q2))
+            break;
+        int size_q1 = (q1_len < SE_KEY_SIZE) ? q1_len : SE_KEY_SIZE;
+        int size_q2 = (q2_len < SE_KEY_SIZE) ? q2_len : SE_KEY_SIZE;
+        for(int i = 0; i < size_q1; i++)
+        {
+            data_q1[i] = q1[size_q1 - i -1];
+        }
+        for(int i = 0; i < size_q2; i++)
+        {
+            data_q2[i] = q2[size_q2 - i -1];
+        }
+        ret = true;
+    }while(0);
 
-    //ptemp1: dividend, pM: divisor, pQ1: qutient, ptemp2: remainder
-    error_code = ippsDiv_BN(ptemp1, pM, pQ1, ptemp2);
-    if(error_code != ippStsNoErr)
-    {
-        goto clean_return;
-    }
-    error_code = ippsMul_BN(pS, ptemp2, ptemp1);
-    if(error_code != ippStsNoErr)
-    {
-        goto clean_return;
-    }
-    error_code = ippsDiv_BN(ptemp1, pM, pQ2, ptemp2);
-    if(error_code != ippStsNoErr)
-    {
-        goto clean_return;
-    }
-    //extract the sign and value of the integer big number from the input structure(pQ1)
-
-    error_code = ippsRef_BN(&sgn, &length_in_bit, &pdata, pQ1);
-    if(error_code != ippStsNoErr)
-    {
-        goto clean_return;
-    }
-    *length_q1 = ROUND_TO(length_in_bit, 8)/8;
-    memset(data_q1, 0, *length_q1);
-    memcpy_s(data_q1, *length_q1, pdata, *length_q1);
-
-    error_code = ippsRef_BN(&sgn, &length_in_bit, &pdata, pQ2);
-    if(error_code != ippStsNoErr)
-    {
-        goto clean_return;
-    }
-    *length_q2 = ROUND_TO(length_in_bit, 8)/8;
-    memset(data_q2, 0, *length_q2);
-    memcpy_s(data_q2, *length_q2, pdata, *length_q2);
-    goto clean_return;
-
-clean_return:
-    secure_free_BN(pM, length_m);
-    secure_free_BN(pS, length_s);
-    secure_free_BN(pQ1, length_m);
-    secure_free_BN(pQ2, length_m);
-    secure_free_BN(ptemp1, length_m*2);
-    secure_free_BN(ptemp2, length_m);
-
-    return error_code;
+    if(q1)
+        free(q1);
+    if(q2)
+        free(q2);
+    if(ptemp1)
+        BN_clear_free(ptemp1);
+    if(ptemp2)
+        BN_clear_free(ptemp2);
+    if(pQ1)
+        BN_clear_free(pQ1);
+    if(pQ2)
+        BN_clear_free(pQ2);
+    if(pS)
+        BN_clear_free(pS);
+    if(pM)
+        BN_clear_free(pM);
+    if(ctx)
+        BN_CTX_free(ctx);
+    return ret;
 }
 
-static bool create_signature(const IppsRSAPrivateKeyState *pri_key1, const char *sigpath, enclave_css_t *enclave_css)
+
+static bool create_signature(const EVP_PKEY *pkey, const char *sigpath, enclave_css_t *enclave_css)
 {
-    IppStatus error_code = ippStsNoErr;
     assert(enclave_css != NULL);
-    assert(!(pri_key1 == NULL && sigpath == NULL) && !(pri_key1 != NULL && sigpath != NULL));
+    assert(!(pkey == NULL && sigpath == NULL) && !(pkey != NULL && sigpath != NULL));
 
     uint8_t signature[SIGNATURE_SIZE];    // keep the signature in big endian
     memset(signature, 0, SIGNATURE_SIZE);
-    //**********get the signature*********
+    //**********get the signature*********//
     if(sigpath != NULL)//CATSIG mode
     {
         if(get_file_size(sigpath) != SIGNATURE_SIZE)
@@ -520,9 +454,9 @@ static bool create_signature(const IppsRSAPrivateKeyState *pri_key1, const char 
         }
     }
     else  //SIGN mode
-    {   
+    {
         size_t buffer_size = sizeof(enclave_css->header) + sizeof(enclave_css->body);
-        Ipp8u * temp_buffer = (Ipp8u *)malloc(buffer_size * sizeof(char));
+        uint8_t * temp_buffer = (uint8_t *)malloc(buffer_size * sizeof(char));
         if(NULL == temp_buffer)
         {
             se_trace(SE_TRACE_ERROR, NO_MEMORY_ERROR);
@@ -531,106 +465,110 @@ static bool create_signature(const IppsRSAPrivateKeyState *pri_key1, const char 
         memcpy_s(temp_buffer, buffer_size, &enclave_css->header, sizeof(enclave_css->header));
         memcpy_s(temp_buffer + sizeof(enclave_css->header), buffer_size - sizeof(enclave_css->header),
             &enclave_css->body, sizeof(enclave_css->body));
-        int pri1_size = 0;
-        if(ippsRSA_GetBufferSizePrivateKey(&pri1_size, pri_key1) != ippStsNoErr)
-        {
-            free(temp_buffer);
-            return false;
-        }
-        Ipp8u *scratch_buf = (Ipp8u *)malloc(pri1_size);
-        if(NULL == scratch_buf)
-        {
-            se_trace(SE_TRACE_ERROR, NO_MEMORY_ERROR);
-            free(temp_buffer);
-            return false;
-        }
-        memset(scratch_buf, 0, pri1_size);
-        error_code = ippsRSASign_PKCS1v15((const Ipp8u *)temp_buffer, (int)buffer_size, (Ipp8u *)signature, pri_key1, NULL, ippHashAlg_SHA256, scratch_buf);
-        free(scratch_buf);
-        free(temp_buffer);
 
-        if(error_code != ippStsNoErr)
+        uint8_t hash[SGX_HASH_SIZE] = {0};
+        unsigned int hash_size = SGX_HASH_SIZE;
+        if(SGX_SUCCESS != sgx_EVP_Digest(EVP_sha256(), temp_buffer, (unsigned int)buffer_size, hash, &hash_size))
+        {
+            free(temp_buffer);
+            return false;
+        }
+        free(temp_buffer);
+        size_t siglen;
+        EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new((EVP_PKEY *)pkey, NULL);
+        if(!ctx)
         {
             return false;
         }
+        if (EVP_PKEY_sign_init(ctx) <= 0 ||
+            EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_PADDING) <= 0 ||
+            EVP_PKEY_CTX_set_signature_md(ctx, EVP_sha256()) <= 0)
+        {
+            EVP_PKEY_CTX_free(ctx);
+            return false;
+        }
+        if(EVP_PKEY_sign(ctx, NULL, &siglen, hash, hash_size) <= 0)
+        {
+            EVP_PKEY_CTX_free(ctx);
+            return false;
+        }
+        if(SIGNATURE_SIZE != siglen)
+        {
+            EVP_PKEY_CTX_free(ctx);
+            return false;  
+        }
+        if(EVP_PKEY_sign(ctx, signature, &siglen, hash, hash_size) <= 0)
+        {
+            EVP_PKEY_CTX_free(ctx);
+            return false;  
+        }
+        EVP_PKEY_CTX_free(ctx);
     }
+
     for(int i = 0; i<SIGNATURE_SIZE; i++)
     {
         (enclave_css->key.signature)[i] = signature[SIGNATURE_SIZE-1-i];
     }
-    //************************calculate q1 and q2*********************
-    int length_q1 = 0, length_q2 = 0;
-    error_code = calc_RSAq1q2(sizeof(enclave_css->key.signature), 
-        (Ipp32u *)&enclave_css->key.signature, 
-        sizeof(enclave_css->key.modulus), 
-        (Ipp32u *)&enclave_css->key.modulus, 
-        &length_q1, 
-        (Ipp32u *)&enclave_css->buffer.q1, 
-        &length_q2, 
-        (Ipp32u *)&enclave_css->buffer.q2);
-    if(error_code != ippStsNoErr)
+
+    //************************calculate q1 and q2*********************//
+    uint8_t modulus[SE_KEY_SIZE];
+    for(int i = 0; i<SE_KEY_SIZE; i++)
     {
-        return false;
+        modulus[i] = enclave_css->key.modulus[SE_KEY_SIZE-1-i];
     }
-    return true;
+    bool res = calc_RSAq1q2(sizeof(enclave_css->key.signature),
+        (const uint8_t *)signature,
+        sizeof(enclave_css->key.modulus),
+        (const uint8_t *)modulus,
+        (uint8_t *)enclave_css->buffer.q1,
+        (uint8_t *)enclave_css->buffer.q2);
+    return res;
 }
 
-static bool verify_signature(const rsa_params_t *rsa, const enclave_css_t *enclave_css,  int *signature_verified)
+static bool verify_signature(const EVP_PKEY *pkey, const enclave_css_t *enclave_css)
 {
-    assert(rsa != NULL && enclave_css != NULL && signature_verified != NULL);
-    IppsRSAPublicKeyState *pub_key = NULL;
-    IppStatus error_code = create_rsa_pub_key(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, rsa->n, rsa->e, &pub_key);
-    if(error_code != ippStsNoErr)
-    {
-        return false;
-    }
+    assert(pkey != NULL && enclave_css != NULL);
     size_t buffer_size = sizeof(enclave_css->header) + sizeof(enclave_css->body);
-    Ipp8u * temp_buffer = (Ipp8u *)malloc(buffer_size * sizeof(char));
+    uint8_t *temp_buffer = (uint8_t *)malloc(buffer_size * sizeof(char));
     if(NULL == temp_buffer)
     {
         se_trace(SE_TRACE_ERROR, NO_MEMORY_ERROR);
-        secure_free_rsa_pub_key(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, pub_key);
         return false;
     }
     memcpy_s(temp_buffer, buffer_size, &enclave_css->header, sizeof(enclave_css->header));
-    memcpy_s(temp_buffer + sizeof(enclave_css->header), buffer_size-sizeof(enclave_css->header), 
+    memcpy_s(temp_buffer + sizeof(enclave_css->header), buffer_size-sizeof(enclave_css->header),
         &enclave_css->body, sizeof(enclave_css->body));
+
+    uint8_t hash[SGX_HASH_SIZE] = {0};
+    unsigned int hash_size = SGX_HASH_SIZE;
+    if(SGX_SUCCESS != sgx_EVP_Digest(EVP_sha256(), temp_buffer, (unsigned int)buffer_size, hash, &hash_size))
+    {
+        free(temp_buffer);
+        return false;
+    }
+    free(temp_buffer);
+
     uint8_t signature[SIGNATURE_SIZE];
     for(int i=0; i<SIGNATURE_SIZE; i++)
     {
         signature[i] = enclave_css->key.signature[SIGNATURE_SIZE-1-i];
     }
-    int pub_size = 0;
-    if(ippsRSA_GetBufferSizePublicKey(&pub_size, pub_key) != ippStsNoErr)
-    {
-        secure_free_rsa_pub_key(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, pub_key);
-        free(temp_buffer);
-        return false;
-    }
-    Ipp8u *scratch_buf = (Ipp8u *)malloc(pub_size);
-    if(NULL == scratch_buf)
-    {
-        se_trace(SE_TRACE_ERROR, NO_MEMORY_ERROR);
-        secure_free_rsa_pub_key(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, pub_key);
-        free(temp_buffer);
-        return false;
-    }
-    memset(scratch_buf, 0, pub_size);
-    error_code = ippsRSAVerify_PKCS1v15((const Ipp8u *)temp_buffer, (int)buffer_size, (Ipp8u *)signature, signature_verified, pub_key, ippHashAlg_SHA256, scratch_buf);
-    free(temp_buffer);
-    free(scratch_buf);
-    secure_free_rsa_pub_key(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, pub_key);
 
-    if(error_code != ippStsNoErr)
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new((EVP_PKEY *)pkey, NULL);
+    if(!ctx)
     {
-        se_trace(SE_TRACE_DEBUG, "ippsRSASSAVerify_SHA256_PKCSv15() returns failure. The ipperrorCode is %d \n", error_code);     
         return false;
     }
-    else
+    if(EVP_PKEY_verify_init(ctx) <= 0 ||
+    EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_PADDING) <= 0 ||
+    EVP_PKEY_CTX_set_signature_md(ctx, EVP_sha256()) <= 0)
     {
-        se_trace(SE_TRACE_DEBUG, "RSAVerify() returns success. The signature_verified is %d\n", *signature_verified);
-        return true;
+        EVP_PKEY_CTX_free(ctx);
+        return false;
     }
+    int ret = EVP_PKEY_verify(ctx, signature, SIGNATURE_SIZE, hash, hash_size);
+    EVP_PKEY_CTX_free(ctx);
+    return ret == 1 ? true : false;
 }
 
 static bool gen_enclave_signing_file(const enclave_css_t *enclave_css, const char *outpath)
@@ -655,7 +593,7 @@ static bool gen_enclave_signing_file(const enclave_css_t *enclave_css, const cha
     return true;
 }
 
-static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char **path, bool *ignore_rel_error)
+static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char **path, uint32_t *option_flag_bits)
 {
     assert(mode!=NULL && path != NULL);
     if(argc<2)
@@ -669,12 +607,17 @@ static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char
          *mode = -1;
          return true;
     }
-
+    if(argc == 2 && !STRCMP(argv[1], "-version"))
+    {
+        se_trace(SE_TRACE_ERROR, VERSION_STRING, STRFILEVER, COPYRIGHT);
+        *mode = -1;
+        return true;
+    }
     enum { PAR_REQUIRED, PAR_OPTIONAL, PAR_INVALID };
     typedef struct _param_struct_{
         const char *name;          //options
         char *value;               //keep the path
-        int flag;                  //indicate this parameter is required(0), optional(1) or invalid(2) 
+        int flag;                  //indicate this parameter is required(0), optional(1) or invalid(2)
     }param_struct_t;               //keep the parameter pairs
 
     param_struct_t params_sign[] = {
@@ -684,8 +627,8 @@ static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char
         {"-out", NULL, PAR_REQUIRED},
         {"-sig", NULL, PAR_INVALID},
         {"-unsigned", NULL, PAR_INVALID},
-        {"-review_enclave", NULL, PAR_INVALID},
-        {"-dumpfile", NULL, PAR_OPTIONAL}};
+        {"-dumpfile", NULL, PAR_OPTIONAL},
+        {"-cssfile", NULL, PAR_OPTIONAL}};
     param_struct_t params_gendata[] = {
         {"-enclave", NULL, PAR_REQUIRED},
         {"-config", NULL, PAR_OPTIONAL},
@@ -693,8 +636,8 @@ static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char
         {"-out", NULL, PAR_REQUIRED},
         {"-sig", NULL, PAR_INVALID},
         {"-unsigned", NULL, PAR_INVALID},
-        {"-review_enclave", NULL, PAR_INVALID},
-        {"-dumpfile", NULL, PAR_INVALID}};
+        {"-dumpfile", NULL, PAR_INVALID},
+        {"-cssfile", NULL, PAR_INVALID}};
     param_struct_t params_catsig[] = {
         {"-enclave", NULL, PAR_REQUIRED},
         {"-config", NULL, PAR_OPTIONAL},
@@ -702,17 +645,8 @@ static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char
         {"-out", NULL, PAR_REQUIRED},
         {"-sig", NULL, PAR_REQUIRED},
         {"-unsigned", NULL, PAR_REQUIRED},
-        {"-review_enclave", NULL, PAR_INVALID},
-        {"-dumpfile", NULL, PAR_OPTIONAL}};
-    param_struct_t params_compare[] = {
-        {"-enclave", NULL, PAR_REQUIRED},
-        {"-config", NULL, PAR_OPTIONAL},
-        {"-key", NULL, PAR_INVALID},
-        {"-out", NULL, PAR_INVALID},
-        {"-sig", NULL, PAR_INVALID},
-        {"-unsigned", NULL, PAR_REQUIRED},
-        {"-review_enclave", NULL, PAR_REQUIRED},
-        {"-dumpfile", NULL, PAR_INVALID}};
+        {"-dumpfile", NULL, PAR_OPTIONAL},
+        {"-cssfile", NULL, PAR_OPTIONAL}};
     param_struct_t params_dump[] = {
         {"-enclave", NULL, PAR_REQUIRED},
         {"-config", NULL, PAR_INVALID},
@@ -720,12 +654,12 @@ static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char
         {"-out", NULL, PAR_INVALID},
         {"-sig", NULL, PAR_INVALID},
         {"-unsigned", NULL, PAR_INVALID},
-        {"-review_enclave", NULL, PAR_INVALID},
-        {"-dumpfile", NULL, PAR_REQUIRED}};
+        {"-dumpfile", NULL, PAR_REQUIRED},
+        {"-cssfile", NULL, PAR_OPTIONAL}};
 
 
-    const char *mode_m[] ={"sign", "gendata","catsig", "compare", "dump"};
-    param_struct_t *params[] = {params_sign, params_gendata, params_catsig, params_compare, params_dump};
+    const char *mode_m[] ={"sign", "gendata","catsig", "dump"};
+    param_struct_t *params[] = {params_sign, params_gendata, params_catsig, params_dump};
     unsigned int tempidx=0;
     for(; tempidx<sizeof(mode_m)/sizeof(mode_m[0]); tempidx++)
     {
@@ -740,37 +674,44 @@ static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char
         se_trace(SE_TRACE_ERROR, UNREC_CMD_ERROR, argv[1]);
         return false;
     }
-    unsigned int err_idx = 2;
-    for(; err_idx < argc; err_idx++)
-    {
-        if(!STRCMP(argv[err_idx], "-ignore-rel-error"))
-            break;
-    }
-    
-    unsigned int params_count = (unsigned)(sizeof(params_sign)/sizeof(params_sign[0]));
-    unsigned int params_count_min = 0;
-    unsigned int params_count_max =0;
-    for(unsigned int i=0; i< params_count; i++)
-    {
-        params_count_max ++;
-        if(params[tempmode][i].flag == PAR_REQUIRED)
-            params_count_min ++;
-    }
-    unsigned int additional_param = 2;
-    if(err_idx != argc)
-        additional_param++;
-    if(argc<params_count_min * 2 + additional_param)
-        return false;
-    if(argc>params_count_max * 2 + additional_param)
-        return false;
+    uint32_t pf_bits = 0;
 
-    for(unsigned int i=2; i<argc; i=i+2)
+    // The struct used to record the options which don't need a path
+    typedef struct _para_flag_map_t
     {
-        if(i == err_idx)
+        const char* para_str;
+        int flag_bit;
+
+    } para_flag_map_t;
+    para_flag_map_t pfm[] =
+    {
+        {"-ignore-rel-error", REL_ERROR_BIT},
+        {"-ignore-init-sec-error", INIT_SEC_ERROR_BIT},
+        {"-resign", RESIGN_BIT}
+    };
+    unsigned int params_count = (unsigned)(sizeof(params_sign)/sizeof(params_sign[0]));
+
+    for(unsigned int i=2; i<argc; i++)
+    {
+        unsigned int idx = 0;
+        for(; idx < sizeof(pfm)/sizeof(pfm[0]); idx++)
         {
-            i++;
+            if(!STRCMP(argv[i], pfm[idx].para_str))
+            {
+                if((pf_bits & pfm[idx].flag_bit) != 0)
+                {
+                    se_trace(SE_TRACE_ERROR, REPEAT_OPTION_ERROR, argv[i]);
+                    return false;
+                }
+                pf_bits |= pfm[idx].flag_bit;
+                break;
+            }
+        }
+        if(idx != sizeof(pfm)/sizeof(pfm[0]))
+        {
             continue;
         }
+
         unsigned int j=0;
         for(; j<params_count; j++)
         {
@@ -784,21 +725,23 @@ static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char
                         return false;
                     }
                     params[tempmode][j].value = argv[i+1];
+                    i++;
                     break;
                 }
-                else     //didn't match: 1) no path parameter behind option parameter 2) parameters format error. 
+                else     //didn't match: 1) no path parameter behind option parameter 2) parameters format error.
                 {
                     se_trace(SE_TRACE_ERROR, INVALID_FILE_NAME_ERROR, params[tempmode][j].name);
                     return false;
                 }
             }
         }
-        if(j>=params_count_max)
+        if(j == params_count)
         {
+            se_trace(SE_TRACE_ERROR, UNREC_OPTION_ERROR, argv[i]);
             return false;
         }
     }
-    for(unsigned int i = 0; i < params_count; i ++)
+    for(unsigned int i = 0; i < params_count; i++)
     {
         if(params[tempmode][i].flag == PAR_REQUIRED && params[tempmode][i].value == NULL)
         {
@@ -811,91 +754,79 @@ static bool cmdline_parse(unsigned int argc, char *argv[], int *mode, const char
             return false;
         }
     }
+    if(STRCMP(mode_m[tempmode], "dump") == 0 && ENABLE_RESIGN(pf_bits))
+    {
+        // No need to set option '-resign' for dump command
+        se_trace(SE_TRACE_ERROR, GIVE_INVALID_OPTION_ERROR, "-resign", mode_m[tempmode]);
+        return false;
+    }
+    
+    for(unsigned int i = 0; i < params_count-1; i++)
+    {
+        if(params[tempmode][i].value == NULL)
+            continue;
+        for(unsigned int j=i+1; j < params_count; j++)
+        {
+            if(params[tempmode][j].value == NULL)
+                continue;
+            if(strlen(params[tempmode][i].value) == strlen(params[tempmode][j].value) &&
+                !STRNCMP(params[tempmode][i].value, params[tempmode][j].value, strlen(params[tempmode][i].value)))
+            {
+                se_trace(SE_TRACE_ERROR, DUPLICATED_FILE_NAME_ERROR, params[tempmode][i].name, params[tempmode][j].name);
+                return false;
+            }
+        }
+    }
+    // Set output parameters
     for(unsigned int i = 0; i < params_count; i++)
     {
         path[i] = params[tempmode][i].value;
     }
+    
+
     *mode = tempmode;
-    if(err_idx != argc)
-       *ignore_rel_error = true; 
+    *option_flag_bits = pf_bits;
     return true;
 
 }
 
-static bool fill_meta_without_signature(const IppsRSAPublicKeyState *pub_key, const char **path, const uint8_t *enclave_hash, 
-                                        const xml_parameter_t *para, metadata_t *metadata, bin_fmt_t bf)
-{
-    assert(path && enclave_hash && para && metadata);
-    if(false == fill_enclave_css(pub_key, para, enclave_hash, path, &metadata->enclave_css, bf))
-    {
-        return false;
-    }
-    set_meta_attributes(metadata);
-
-    return true;
-}
-
-//generate_output: 
+//generate_output:
 //    To generate the final output file
 //    SIGN-    need to fill the enclave_css_t(key part included), sign the header and body and
 //             update the metadata in the out file
-//    GENDATA- need to fill the enclave_css_t(key part excluded), get the body and header, 
+//    GENDATA- need to fill the enclave_css_t(key part excluded), get the body and header,
 //             and then write the whole out file with body+header+hash
-//    CATSIG-  need to fill the enclave_css_t(include key), read the signature from the sigpath, 
+//    CATSIG-  need to fill the enclave_css_t(include key), read the signature from the sigpath,
 //             and then update the metadata in the out file
-static bool generate_output(int mode, int ktype, const uint8_t *enclave_hash, const xml_parameter_t *para, const rsa_params_t *rsa, metadata_t *metadata, 
-                            const char **path, bin_fmt_t bf, uint64_t meta_offset)
+static bool generate_output(int mode, int ktype, const uint8_t *enclave_hash, const EVP_PKEY *pkey, metadata_t *metadata,
+                            const char **path)
 {
-    assert(enclave_hash != NULL && para != NULL && metadata != NULL && path != NULL && rsa != NULL);
-    IppsRSAPrivateKeyState *pri_key1 = NULL;
-    IppsRSAPublicKeyState *pub_key = NULL;
-    int validate_result = IS_INVALID_KEY;
-    IppStatus error_code = ippStsNoErr;
+    assert(enclave_hash != NULL && metadata != NULL && path != NULL);
 
     switch(mode)
     {
     case SIGN:
         {
-            if(ktype != PRIVATE_KEY)
+            if(ktype != PRIVATE_KEY || !pkey)
             {
                 se_trace(SE_TRACE_ERROR, LACK_PRI_KEY_ERROR);
                 return false;
             }
 
-            error_code = create_validate_rsa_key_pair(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, rsa->n, rsa->d, rsa->e, 
-                rsa->p, rsa->q, rsa->dmp1, rsa->dmq1, rsa->iqmp, &pri_key1, &pub_key, &validate_result);
-            if(error_code != ippStsNoErr || validate_result != IS_VALID_KEY)
+            if(false == fill_enclave_css(pkey, path, enclave_hash, &(metadata->enclave_css)))
             {
-                se_trace(SE_TRACE_ERROR, KEY_FORMAT_ERROR);
-                secure_free_rsa_pri1_key(N_SIZE_IN_BYTES, D_SIZE_IN_BYTES, pri_key1);
-                secure_free_rsa_pub_key(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, pub_key);
+                return false;
+            }
+            if(false == create_signature(pkey, NULL, &(metadata->enclave_css)))
+            {
                 return false;
             }
 
-            if(false == fill_meta_without_signature(pub_key, path, enclave_hash, para, metadata, bf))
-            {
-                secure_free_rsa_pri1_key(N_SIZE_IN_BYTES, D_SIZE_IN_BYTES, pri_key1);
-                secure_free_rsa_pub_key(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, pub_key);
-                return false;
-            }
-            if(false == create_signature(pri_key1, NULL, &(metadata->enclave_css)))
-            {
-                secure_free_rsa_pri1_key(N_SIZE_IN_BYTES, D_SIZE_IN_BYTES, pri_key1);
-                secure_free_rsa_pub_key(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, pub_key);
-                return false;
-            }
-            secure_free_rsa_pri1_key(N_SIZE_IN_BYTES, D_SIZE_IN_BYTES, pri_key1);
-            secure_free_rsa_pub_key(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, pub_key);
-
-            if(false == update_metadata(path[OUTPUT], metadata, meta_offset))
-            {
-                return false;
-            }
             break;
         }
     case GENDATA:
         {
-            if(false == fill_meta_without_signature(NULL, path, enclave_hash, para, metadata, bf))
+            if(false == fill_enclave_css(NULL, path, enclave_hash, &(metadata->enclave_css)))
             {
                 return false;
             }
@@ -907,29 +838,18 @@ static bool generate_output(int mode, int ktype, const uint8_t *enclave_hash, co
         }
     case CATSIG:
         {
-            if(ktype != PUBLIC_KEY)
+            if(ktype != PUBLIC_KEY || !pkey)
             {
                 se_trace(SE_TRACE_ERROR, LACK_PUB_KEY_ERROR);
                 return false;
             }
 
-            if(create_rsa_pub_key(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, rsa->n, rsa->e, &pub_key) != ippStsNoErr)
+            if(false == fill_enclave_css(pkey, path, enclave_hash, &(metadata->enclave_css)))
             {
-                se_trace(SE_TRACE_ERROR, KEY_FORMAT_ERROR);
                 return false;
             }
-            if(false == fill_meta_without_signature(pub_key, path, enclave_hash, para, metadata, bf))
-            {
-                secure_free_rsa_pub_key(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, pub_key);
-                return false;
-            }
-            secure_free_rsa_pub_key(N_SIZE_IN_BYTES, E_SIZE_IN_BYTES, pub_key);
 
             if(false == create_signature(NULL, path[SIG], &(metadata->enclave_css)))
-            {   
-                return false;
-            }
-            if(false == update_metadata(path[OUTPUT], metadata, meta_offset))
             {
                 return false;
             }
@@ -942,187 +862,431 @@ static bool generate_output(int mode, int ktype, const uint8_t *enclave_hash, co
     }
     return true;
 }
-//compare two enclaves
-static bool compare_enclave(const char **path, const xml_parameter_t *para)
+
+
+
+
+#include "se_page_attr.h"
+
+/*
+ * Dump layout information available in the metadata
+ */
+static bool dump_metadata_layout(metadata_t * metadata)
 {
-    assert(path != NULL && para != NULL);
-    bool res = false;
-    int ret = SGX_SUCCESS;
-    sgx_status_t status1 = SGX_SUCCESS, status2 = SGX_SUCCESS;
-    uint32_t file_size1 =0 , file_size2 = 0;
-    size_t file_size = 0;
-    bin_fmt_t bin_fmt1 = BF_UNKNOWN, bin_fmt2 = BF_UNKNOWN;
-    uint8_t enclave_hash[SGX_HASH_SIZE] = {0};
-    uint8_t *buf = NULL;
-    uint64_t quota = 0;
-    CMetadata *meta = NULL;
-    metadata_t metadata;
-    enclave_diff_info_t enclave_diff_info1, enclave_diff_info2;
-    enclave_css_t enclave_css;
-    memset(&enclave_css, 0, sizeof(enclave_css_t));
-    memset(&enclave_diff_info1, 0, sizeof(enclave_diff_info_t));
-    memset(&enclave_diff_info2, 0, sizeof(enclave_diff_info_t));
-    memset(&metadata, 0, sizeof(metadata_t));
+    layout_entry_t *start = NULL;
+    layout_entry_t *end = NULL;
+    uint32_t size = 0;
+    uint16_t entry_id = 0;
+    uint16_t entry_cnt = 0;
 
-    se_file_handle_t fh1 = open_file(path[DLL]);
-    if (fh1 == THE_INVALID_HANDLE)
-    {
-        se_trace(SE_TRACE_ERROR, OPEN_FILE_ERROR, path[DLL]);
-        return false;
-    }
+    do {
+        if (metadata->magic_num != METADATA_MAGIC || metadata->size == 0)
+            break;
 
-    se_file_handle_t fh2 = open_file(path[REVIEW_ENCLAVE]);
-    if (fh2 == THE_INVALID_HANDLE)
-    {
-        se_trace(SE_TRACE_ERROR, OPEN_FILE_ERROR, path[REVIEW_ENCLAVE]);
-        close_handle(fh1);
-        return false;
-    }
+        size += metadata->size;
+        if (size < metadata->size) {
+            return false;
+        }
+        else {
+            SE_TRACE_DEBUG("\n");
+            se_trace(SE_TRACE_DEBUG, "\tMetadata Version = 0x%016llX\n", metadata->version);
+            start = GET_PTR(layout_entry_t, metadata, metadata->dirs[DIR_LAYOUT].offset);
+            end = GET_PTR(layout_entry_t, start, metadata->dirs[DIR_LAYOUT].size);
+            entry_cnt = 0;
+            for (layout_entry_t *layout = start; layout < end; layout++)
+            {
+                entry_id = layout->id;
 
+                if (!IS_GROUP_ID(entry_id)) {
+                    se_trace(SE_TRACE_DEBUG, "\tEntry Id(%2u) = %4u, %-16s,  ", entry_cnt++, entry_id, layout_id_str[entry_id]);
+                    se_trace(SE_TRACE_DEBUG, "Page Count = %5u,  ", layout->page_count);
+                    se_trace(SE_TRACE_DEBUG, "Attributes = 0x%02X,  ", layout->attributes);
+                    se_trace(SE_TRACE_DEBUG, "Flags = 0x%016llX,  ", layout->si_flags);
+                    se_trace(SE_TRACE_DEBUG, "RVA = 0x%016llX --- 0x%016llX\n", layout->rva, layout->rva + 4096 * layout->page_count);
+                }
+                else {
+                    layout_group_t *layout_grp = reinterpret_cast<layout_group_t*>(layout);
+                    se_trace(SE_TRACE_DEBUG, "\tEntry Id(%2u) = %4u, %-16s,  ", entry_cnt++, entry_id, layout_id_str[entry_id & ~(GROUP_FLAG)]);
+                    se_trace(SE_TRACE_DEBUG, "Entry Count = %4u,  ", layout_grp->entry_count);
+                    se_trace(SE_TRACE_DEBUG, "Load Times = %u,     ", layout_grp->load_times);
+                    se_trace(SE_TRACE_DEBUG, "LStep = 0x%016llX\n", layout_grp->load_step);
+                }
+            }
 
-    std::unique_ptr<map_handle_t, void (*)(map_handle_t*)> mh1(map_file(fh1, &file_size1), unmap_file);
-    if (!mh1)
-    {
-        close_handle(fh1);
-        close_handle(fh2);
-        return false;
-    }
-    std::unique_ptr<map_handle_t, void (*)(map_handle_t*)> mh2(map_file(fh2, &file_size2), unmap_file);
-    if (!mh2)
-    {
-        close_handle(fh1);
-        close_handle(fh2);
-        return false;
-    }
+        }
+        metadata = (metadata_t *)((size_t)metadata + metadata->size);
 
-    //check if file_size is the same
-    if(file_size1 != file_size2)
-    {
-        close_handle(fh1);
-        close_handle(fh2);
-        return false;
-    }
+    } while (size < METADATA_SIZE);
 
-    // Parse enclave
-    std::unique_ptr<BinParser> parser1(binparser::get_parser(mh1->base_addr, (size_t)file_size1));
-    assert(parser1 != NULL);
-    std::unique_ptr<BinParser> parser2(binparser::get_parser(mh2->base_addr, (size_t)file_size2));
-    assert(parser2 != NULL);
-
-    status1 = parser1->run_parser();
-    if (status1 != SGX_SUCCESS)
-    {
-        goto clear_return;
-    }
-
-    status2 = parser2->run_parser();
-    if (status2 != SGX_SUCCESS)
-    {
-        goto clear_return;
-    }
-
-    // Collect enclave info
-    bin_fmt1 = parser1->get_bin_format();
-    bin_fmt2 = parser2->get_bin_format();
-    //two enclave should have same format
-    if(bin_fmt1 != bin_fmt2)
-    {
-        goto clear_return;
-    }
-  
-    //modify some info of enclave: timestamp etc.
-    status1 = parser1->get_info(&enclave_diff_info1);
-    if(status1 != SGX_SUCCESS)
-    {
-        goto clear_return;
-    }
-    status2 = parser2->get_info(&enclave_diff_info2);
-    if(status2 != SGX_SUCCESS)
-    {
-        goto clear_return;
-    }
-    status2 = parser2->modify_info(&enclave_diff_info1);
-    if(status2 != SGX_SUCCESS)
-    {
-        goto clear_return;
-    }
- 
-    //get enclave hash from unsigned file
-    file_size = get_file_size(path[UNSIGNED]);
-    if (file_size != sizeof(enclave_css.header) + sizeof(enclave_css.body) &&
-        file_size != sizeof(enclave_css.header) + sizeof(enclave_css.body) + sizeof(enclave_css.key))
-    {
-        goto clear_return;
-    }
-
-    buf = (uint8_t *)malloc(file_size);
-    if (buf == NULL)
-    {
-        goto clear_return;
-    }
-    memset(buf, 0, file_size);
-    if(read_file_to_buf(path[UNSIGNED], buf, file_size) == false)
-    {
-        free(buf);
-        goto clear_return;
-    }
-    memcpy_s(&enclave_css.header, sizeof(enclave_css.header), buf, sizeof(enclave_css.header));
-    memcpy_s(&enclave_css.body, sizeof(enclave_css.body), buf + (file_size - sizeof(enclave_css.body)), sizeof(enclave_css.body));
-    free(buf);
-
-    // Load enclave to get enclave hash
-    meta = new CMetadata(&metadata, parser2.get());
-    if(meta->build_metadata(para) == false)
-    {
-        delete meta;
-        goto clear_return;
-    }
-    delete meta;
-
-    ret = load_enclave(parser2.release(), &metadata);
-    if(ret != SGX_SUCCESS)
-    {
-        goto clear_return;
-    }
-    ret = dynamic_cast<EnclaveCreatorST*>(get_enclave_creator())->get_enclave_info(enclave_hash, SGX_HASH_SIZE, &quota);
-    if(ret != SGX_SUCCESS)
-    {
-        goto clear_return;
-    }
-    
-    //make path[UNSIGNED] = NULL, so fill_meta_without_signature won't treat it as catsig
-    path[UNSIGNED] = NULL;
-    if(false == fill_meta_without_signature(NULL, path, enclave_hash, para, &metadata, bin_fmt2))
-    {
-        goto clear_return;
-    }
-
-    //compare 
-    metadata.enclave_css.header.date = 0;
-    enclave_css.header.date = 0;
-    if(memcmp(&metadata.enclave_css.header, &enclave_css.header, sizeof(enclave_css.header)) != 0)
-    {
-        goto clear_return;
-    }
-    if(memcmp(&metadata.enclave_css.body, &enclave_css.body, sizeof(enclave_css.body)) != 0)
-    {
-        goto clear_return;
-    }
-    
-    res = true;
-clear_return:
-    close_handle(fh1);
-    close_handle(fh2);
-    return res;
+    return true;
 }
 
-static bool dump_enclave_metadata(const char *enclave_path, const char *dumpfile_path)
+/*
+ * We need to add the RSRV layout back at the end.
+ */
+static bool metadata_add_layout(metadata_t *metadata, layout_t * min_layout_to_add, layout_t * init_layout_to_add, layout_t * max_layout_to_add)
+{
+    uint32_t size = 0;
+    void * start = GET_PTR(void *, metadata, metadata->dirs[DIR_LAYOUT].offset);
+    void * end = NULL;
+    layout_entry_t * layout = NULL;
+    uint16_t entry_id = 0;
+
+    if (min_layout_to_add)
+    {
+        size = metadata->size;
+        end = GET_PTR(void *, start, metadata->dirs[DIR_LAYOUT].size);
+        if (memcpy_s(end, METADATA_SIZE - size, min_layout_to_add, sizeof(layout_t))) {
+            se_trace(SE_TRACE_WARNING, "%s: Error memcpy_s failed\n", __FUNCTION__);
+            return false;
+        }
+        metadata->size += (uint32_t)sizeof(layout_t);
+        metadata->dirs[DIR_LAYOUT].size += (uint32_t)sizeof(layout_t);
+
+        layout = (layout_entry_t *)min_layout_to_add;
+        entry_id = layout->id;
+        SE_TRACE_DEBUG("\n");
+        if (!IS_GROUP_ID(entry_id)) {
+            se_trace(SE_TRACE_DEBUG, "\tEntry Id(%2u) = %4u, %-16s,  ", 0, entry_id, layout_id_str[entry_id]);
+            se_trace(SE_TRACE_DEBUG, "Page Count = %5u,  ", layout->page_count);
+            se_trace(SE_TRACE_DEBUG, "Attributes = 0x%02X,  ", layout->attributes);
+            se_trace(SE_TRACE_DEBUG, "Flags = 0x%016llX,  ", layout->si_flags);
+            se_trace(SE_TRACE_DEBUG, "RVA = 0x%016llX --- 0x%016llX\n", layout->rva, layout->rva + 4096 * layout->page_count);
+        }
+        else {
+            layout_group_t *layout_grp = reinterpret_cast<layout_group_t*>(layout);
+            se_trace(SE_TRACE_DEBUG, "\tEntry Id(%2u) = %4u, %-16s,  ", 0, entry_id, layout_id_str[entry_id & ~(GROUP_FLAG)]);
+            se_trace(SE_TRACE_DEBUG, "Entry Count = %4u,  ", layout_grp->entry_count);
+            se_trace(SE_TRACE_DEBUG, "Load Times = %u,     ", layout_grp->load_times);
+            se_trace(SE_TRACE_DEBUG, "LStep = 0x%016llX\n", layout_grp->load_step);
+        }
+
+    }
+
+    if (init_layout_to_add)
+    {
+        // Remove the PAGE_ATTR_POST_ADD attribute so that a dynamic
+        // range isn't created during enclave loading time.
+        init_layout_to_add->entry.attributes &= (uint16_t)(~PAGE_ATTR_POST_ADD);
+
+        size = metadata->size;
+        end = GET_PTR(void *, start, metadata->dirs[DIR_LAYOUT].size);
+        if (memcpy_s(end, METADATA_SIZE - size, init_layout_to_add, sizeof(layout_t))) {
+            se_trace(SE_TRACE_WARNING, "%s: Error memcpy_s failed\n", __FUNCTION__);
+            return false;
+        }
+        metadata->size += (uint32_t)sizeof(layout_t);
+        metadata->dirs[DIR_LAYOUT].size += (uint32_t)sizeof(layout_t);
+
+        layout = (layout_entry_t *)init_layout_to_add;
+        entry_id = layout->id;
+        SE_TRACE_DEBUG("\n");
+        if (!IS_GROUP_ID(entry_id)) {
+            se_trace(SE_TRACE_DEBUG, "\tEntry Id(%2u) = %4u, %-16s,  ", 0, entry_id, layout_id_str[entry_id]);
+            se_trace(SE_TRACE_DEBUG, "Page Count = %5u,  ", layout->page_count);
+            se_trace(SE_TRACE_DEBUG, "Attributes = 0x%02X,  ", layout->attributes);
+            se_trace(SE_TRACE_DEBUG, "Flags = 0x%016llX,  ", layout->si_flags);
+            se_trace(SE_TRACE_DEBUG, "RVA = 0x%016llX --- 0x%016llX\n", layout->rva, layout->rva + 4096 * layout->page_count);
+        }
+        else {
+            layout_group_t *layout_grp = reinterpret_cast<layout_group_t*>(layout);
+            se_trace(SE_TRACE_DEBUG, "\tEntry Id(%2u) = %4u, %-16s,  ", 0, entry_id, layout_id_str[entry_id & ~(GROUP_FLAG)]);
+            se_trace(SE_TRACE_DEBUG, "Entry Count = %4u,  ", layout_grp->entry_count);
+            se_trace(SE_TRACE_DEBUG, "Load Times = %u,     ", layout_grp->load_times);
+            se_trace(SE_TRACE_DEBUG, "LStep = 0x%016llX\n", layout_grp->load_step);
+        }
+    }
+
+    if (max_layout_to_add)
+    {
+        // Modify LAYOUT_ID_RSRV_MAX so that it isn't included in the
+        // MRENCLAVE. Remove the PAGE_ATTR_POST_ADD attribute so that a
+        // dynamic range isn't created during enclave loading time.
+        max_layout_to_add->entry.si_flags = SI_FLAG_NONE;
+        max_layout_to_add->entry.attributes &= (uint16_t)(~PAGE_ATTR_POST_ADD);
+
+        size = metadata->size;
+        end = GET_PTR(void *, start, metadata->dirs[DIR_LAYOUT].size);
+        if (memcpy_s(end, METADATA_SIZE - size, max_layout_to_add, sizeof(layout_t))) {
+            se_trace(SE_TRACE_WARNING, "%s: Error memcpy_s failed\n", __FUNCTION__);
+            return false;
+        }
+        metadata->size += (uint32_t)sizeof(layout_t);
+        metadata->dirs[DIR_LAYOUT].size += (uint32_t)sizeof(layout_t);
+
+        layout = (layout_entry_t *)max_layout_to_add;
+        entry_id = layout->id;
+        SE_TRACE_DEBUG("\n");
+        if (!IS_GROUP_ID(entry_id)) {
+            se_trace(SE_TRACE_DEBUG, "\tEntry Id(%2u) = %4u, %-16s,  ", 0, entry_id, layout_id_str[entry_id]);
+            se_trace(SE_TRACE_DEBUG, "Page Count = %5u,  ", layout->page_count);
+            se_trace(SE_TRACE_DEBUG, "Attributes = 0x%02X,  ", layout->attributes);
+            se_trace(SE_TRACE_DEBUG, "Flags = 0x%016llX,  ", layout->si_flags);
+            se_trace(SE_TRACE_DEBUG, "RVA = 0x%016llX --- 0x%016llX\n", layout->rva, layout->rva + 4096 * layout->page_count);
+        }
+        else {
+            layout_group_t *layout_grp = reinterpret_cast<layout_group_t*>(layout);
+            se_trace(SE_TRACE_DEBUG, "\tEntry Id(%2u) = %4u, %-16s,  ", 0, entry_id, layout_id_str[entry_id & ~(GROUP_FLAG)]);
+            se_trace(SE_TRACE_DEBUG, "Entry Count = %4u,  ", layout_grp->entry_count);
+            se_trace(SE_TRACE_DEBUG, "Load Times = %u,     ", layout_grp->load_times);
+            se_trace(SE_TRACE_DEBUG, "LStep = 0x%016llX\n", layout_grp->load_step);
+        }
+    }
+
+    return true;
+}
+
+static void metadata_cleanup(metadata_t *metadata, uint32_t size_to_reduce)
+{
+    layout_t *heap_max = NULL, *heap_init = NULL, *ut_stack_max = NULL;
+    metadata->dirs[DIR_LAYOUT].size -= size_to_reduce;
+    metadata->size -= size_to_reduce;
+
+    layout_t *start = GET_PTR(layout_t, metadata, metadata->dirs[DIR_LAYOUT].offset);
+    layout_t *end = GET_PTR(layout_t, start, metadata->dirs[DIR_LAYOUT].size);
+    for (layout_t *l = start; l < end; l++)
+    {
+        if (heap_max != NULL && heap_init != NULL && ut_stack_max != NULL)
+            break;
+
+        if ((heap_max == NULL) && (l->entry.id == LAYOUT_ID_HEAP_MAX))
+        {
+            heap_max = l;
+            continue;
+        }
+        if ((heap_init == NULL) && (l->entry.id == LAYOUT_ID_HEAP_INIT))
+        {
+            heap_init = l;
+            continue;
+        }
+        if ((ut_stack_max == NULL) && (l->entry.id == LAYOUT_ID_STACK_MAX))
+        {
+            ut_stack_max = l;
+            continue;
+        }
+    }
+
+    // if there exists LAYOUT_ID_HEAP_MAX, modify it so that it won't be included
+    // in the MRENCLAVE, also remove the PAGE_ATTR_POST_ADD attribute so that
+    // dynamic range won't be created during enclave loading time
+    if (heap_max)
+    {
+        heap_max->entry.si_flags = SI_FLAG_NONE;
+        heap_max->entry.attributes &= (uint16_t)(~PAGE_ATTR_POST_ADD);
+    }
+
+    if (heap_init)
+    {
+        heap_init->entry.attributes &= (uint16_t)(~PAGE_ATTR_POST_ADD);
+    }
+
+    if (ut_stack_max)
+    {
+        ut_stack_max->entry.attributes &= (uint16_t)(~PAGE_ATTR_POST_ADD);
+    }
+}
+
+static bool append_compatible_metadata(metadata_t *compat_metadata, metadata_t *metadata)
+{
+    metadata_t *dest_meta = metadata;
+    uint32_t size = 0;
+    do{
+        if(dest_meta->magic_num != METADATA_MAGIC || dest_meta->size == 0)
+            break;
+
+        size += dest_meta->size;
+        if(size < dest_meta->size)
+            return false;
+        dest_meta = (metadata_t *)((size_t)dest_meta + dest_meta->size);
+
+    } while(size < METADATA_SIZE);
+
+    if(size + compat_metadata->size < size ||
+            size + compat_metadata->size < compat_metadata->size ||
+            size + compat_metadata->size > METADATA_SIZE)
+        return false;
+
+    if(memcpy_s(dest_meta, METADATA_SIZE - size , compat_metadata, compat_metadata->size))
+        return false;
+    return true;
+}
+
+static bool handle_compatible_metadata(metadata_t *compat_metadata, metadata_t *metadata, bool append)
+{
+    if (append) {
+        se_trace(SE_TRACE_ERROR, "%s: Append metadata version 0x%lx\n", __FUNCTION__, compat_metadata->version);
+        return append_compatible_metadata(compat_metadata, metadata);
+    } else {
+        // overwrite
+        memset(metadata, 0, METADATA_SIZE);
+        if(memcpy_s(metadata, METADATA_SIZE, compat_metadata, compat_metadata->size))
+            return false;
+        se_trace(SE_TRACE_ERROR, "%s: Overwrite with metadata version 0x%lx\n", __FUNCTION__, metadata->version);
+        return true;
+    }
+}
+
+static bool generate_compatible_metadata(metadata_t *metadata, const xml_parameter_t *parameter, uint8_t meta_versions)
+{
+    if(meta_versions == 0)
+    {
+        se_trace(SE_TRACE_ERROR, "metadata version is invalid");
+        return false;
+    }
+
+    bool meta_sgx1_only = ((meta_versions & 3u) == 1u);
+    bool meta_sgx2_only = ((meta_versions & 3u) == 2u);
+    bool append = (meta_sgx1_only ? false : true);
+
+    if (meta_sgx2_only) {
+        se_trace(SE_TRACE_ERROR, "%s: Only requires SGX2 metadata\n", __FUNCTION__);
+        return true;
+    }
+
+    metadata_t *metadata2 = (metadata_t *)malloc(metadata->size);
+    if(!metadata2)
+    {
+        se_trace(SE_TRACE_ERROR, NO_MEMORY_ERROR);
+        return false;
+    }
+    SE_TRACE_DEBUG("\n");
+
+    if (memcpy_s(metadata2, metadata->size, metadata, metadata->size)) {
+        se_trace(SE_TRACE_ERROR, "%s: Error memcpy_s failed\n", __FUNCTION__);
+        free(metadata2);
+        return false;
+    }
+
+    // append 1_9 metadata
+    if(parameter[ELRANGESIZE].value != 0)
+    {
+        metadata2->version = META_DATA_MAKE_VERSION(SGX_1_ELRANGE_MAJOR_VERSION,SGX_1_9_MINOR_VERSION);
+    }
+    else
+    {
+        metadata2->version = META_DATA_MAKE_VERSION(SGX_1_9_MAJOR_VERSION,SGX_1_9_MINOR_VERSION);
+    }
+    layout_t *start = GET_PTR(layout_t, metadata2, metadata2->dirs[DIR_LAYOUT].offset);
+    layout_t *end = GET_PTR(layout_t, start, metadata2->dirs[DIR_LAYOUT].size);
+    layout_t tmp_layout;
+    layout_t *ut_start = NULL, *ut_end = NULL, *after_ut = NULL;
+    layout_t *min_rsrv_entry = NULL;
+    layout_t *init_rsrv_entry = NULL;
+    layout_t *max_rsrv_entry = NULL;
+    uint32_t size_to_reduce = 0;
+    bool ret = false;
+
+    // locate utility thread start and end entries
+    for (layout_t *l = start; l < end; l++)
+    {
+        if (ut_start != NULL && ut_end != NULL)
+            break;
+
+        if ((ut_start == NULL) && (l->entry.id == LAYOUT_ID_GUARD))
+        {
+            ut_start = l;
+            continue;
+        }
+        if ((ut_end == NULL) && (l->entry.id == LAYOUT_ID_TD))
+        {
+            ut_end = l;
+            continue;
+        }
+    }
+
+    assert((ut_start != NULL) && (ut_end != NULL) && ((size_t)ut_end > (size_t)ut_start));
+
+    /* Store location of RSRV layouts */
+    for (layout_t *l = start; l < end; l++)
+    {
+        if (l->entry.id == LAYOUT_ID_RSRV_MIN)
+        {
+            min_rsrv_entry = l;
+            continue;
+        }
+        else if (l->entry.id == LAYOUT_ID_RSRV_INIT)
+        {
+            init_rsrv_entry = l;
+            continue;
+        }
+        else if (l->entry.id == LAYOUT_ID_RSRV_MAX)
+        {
+            max_rsrv_entry = l;
+            continue;
+        }
+    }
+
+    // entry/group layout if they all exist:
+    // utility thread | minpool thread | minpool group | eremove thread | eremove group | dyn thread | dyn group
+
+    // there is only an utility thread and no RSVR layout in layout table
+    if (&ut_end[1] == end)
+    {
+        se_trace(SE_TRACE_DEBUG, "%s: Utility thread TD is the last layout\n", __FUNCTION__);
+        metadata_cleanup(metadata2, 0);
+        ret = handle_compatible_metadata(metadata2, metadata, append);
+        free(metadata2);
+        return ret;
+    }
+    // only an utility thread + RSVR layouts
+    else if(&ut_end[1] == min_rsrv_entry)
+    {
+        se_trace(SE_TRACE_DEBUG, "%s: Utility thread TD + RSVR layout\n", __FUNCTION__);
+        metadata_cleanup(metadata2, 0);
+        // Cleanup dynamic range for RSRV
+        if (init_rsrv_entry)
+        {
+            init_rsrv_entry->entry.attributes &= (uint16_t)(~PAGE_ATTR_POST_ADD);
+        }
+        if (max_rsrv_entry)
+        {
+            max_rsrv_entry->entry.si_flags = SI_FLAG_NONE;
+            max_rsrv_entry->entry.attributes &= (uint16_t)(~PAGE_ATTR_POST_ADD);
+        }
+        ret = handle_compatible_metadata(metadata2, metadata, append);
+        free(metadata2);
+        return ret;
+    }
+
+    // build a group layout to represent all the possible minpool/eremoved layouts
+    after_ut = &ut_end[1];
+    uint16_t num_of_entries = (uint16_t)(after_ut - ut_start);
+
+    memset(&tmp_layout, 0, sizeof(tmp_layout));
+    tmp_layout.group.id = LAYOUT_ID_THREAD_GROUP;
+    tmp_layout.group.entry_count = num_of_entries;
+    tmp_layout.group.load_times = (uint32_t)parameter[TCSNUM].value - 1;
+    for (uint32_t i = 0; i < tmp_layout.group.entry_count; i++)
+    {
+        tmp_layout.group.load_step += (((uint64_t)ut_start[i].entry.page_count) << SE_PAGE_SHIFT);
+    }
+
+    memcpy_s(after_ut, sizeof(layout_t), &tmp_layout, sizeof(layout_t));
+    size_to_reduce = (uint32_t)((size_t)end - (size_t)(&after_ut[1]));
+    metadata_cleanup(metadata2, size_to_reduce);
+    /* Append RSRV layout information */
+    if (NULL != min_rsrv_entry)
+    {
+        ret = metadata_add_layout(metadata2, min_rsrv_entry, init_rsrv_entry, max_rsrv_entry);
+        if (false == ret)
+            goto end;
+    }
+    ret = handle_compatible_metadata(metadata2, metadata, append);
+    if (false == ret)
+        goto end;
+    ret = dump_metadata_layout(metadata);
+end:
+    free(metadata2);
+    return ret;
+}
+
+static bool dump_enclave_metadata(const char *enclave_path, const char *dumpfile_path, const char *cssfile)
 {
     assert(enclave_path != NULL && dumpfile_path != NULL);
-    
+
     uint64_t meta_offset = 0;
     bin_fmt_t bin_fmt = BF_UNKNOWN;
-    uint32_t file_size = 0;
+    off_t file_size = 0;
 
     se_file_handle_t fh = open_file(enclave_path);
     if (fh == THE_INVALID_HANDLE)
@@ -1155,91 +1319,103 @@ static bool dump_enclave_metadata(const char *enclave_path, const char *dumpfile
         close_handle(fh);
         return false;
     }
+
     const metadata_t *metadata = GET_PTR(metadata_t, mh->base_addr, meta_offset); 
     if(print_metadata(dumpfile_path, metadata) == false)
     {
         close_handle(fh);
-        remove(dumpfile_path);
         return false;
+    }
+    if(cssfile != NULL)
+    {
+        if (write_data_to_file(cssfile, std::ios::binary | std::ios::out,
+            (uint8_t *)&(metadata->enclave_css), sizeof(enclave_css_t)) == false)
+        {
+            close_handle(fh);
+            return false;
+        }
     }
 
     close_handle(fh);
     return true;
 }
-
 int main(int argc, char* argv[])
 {
-    xml_parameter_t parameter[] = {{"ProdID", 0xFFFF, 0, 0, 0},
-                                   {"ISVSVN", 0xFFFF, 0, 0, 0},
-                                   {"ReleaseType", 1, 0, 0, 0},
-                                   {"IntelSigned", 1, 0, 0, 0},
-                                   {"ProvisionKey",1,0,0,0},
-                                   {"LaunchKey",1,0,0,0},
-                                   {"DisableDebug",1,0,0,0},
-                                   {"HW", 0x10,0,0,0},
-                                   {"TCSNum",0xFFFFFFFF,TCS_NUM_MIN,1,0},
-                                   {"TCSPolicy",TCS_POLICY_UNBIND,TCS_POLICY_BIND,TCS_POLICY_UNBIND,0},
-                                   {"StackMaxSize",0x1FFFFFFFFF,STACK_SIZE_MIN,0x40000,0},
-                                   {"HeapMaxSize",0x1FFFFFFFFF,HEAP_SIZE_MIN,0x100000,0},
-                                   {"MiscSelect", 0xFFFFFFFF, 0, DEFAULT_MISC_SELECT, 0},
-                                   {"MiscMask", 0xFFFFFFFF, 0, DEFAULT_MISC_MASK, 0}};
-
+    xml_parameter_t parameter[] = {/* name,                 max_value          min_value,      default value,       flag */
+                                   {"ProdID",               0xFFFF,                0,              0,                   0},
+                                   {"ISVSVN",               0xFFFF,                0,              0,                   0},
+                                   {"ReleaseType",          1,                     0,              0,                   0},
+                                   {"IntelSigned",          1,                     0,              0,                   0},
+                                   {"ProvisionKey",         1,                     0,              0,                   0},
+                                   {"LaunchKey",            1,                     0,              0,                   0},
+                                   {"DisableDebug",         1,                     0,              0,                   0},
+                                   {"HW",                   0x10,                  0,              0,                   0},
+                                   {"TCSNum",               0xFFFFFFFF,            TCS_NUM_MIN,    TCS_NUM_MIN,         0},
+                                   {"TCSMaxNum",            0xFFFFFFFF,            TCS_NUM_MIN,    TCS_NUM_MIN,         0},
+                                   {"TCSMinPool",           0xFFFFFFFF,            0,              TCS_NUM_MIN,         0},
+                                   {"TCSPolicy",            TCS_POLICY_UNBIND,     TCS_POLICY_BIND,TCS_POLICY_UNBIND,   0},
+                                   {"StackMaxSize",         ENCLAVE_MAX_SIZE_64/2, STACK_SIZE_MIN, STACK_SIZE_MAX,      0},
+                                   {"StackMinSize",         ENCLAVE_MAX_SIZE_64/2, STACK_SIZE_MIN, STACK_SIZE_MIN,      0},
+                                   {"HeapMaxSize",          ENCLAVE_MAX_SIZE_64/2, 0,              HEAP_SIZE_MAX,       0},
+                                   {"HeapMinSize",          ENCLAVE_MAX_SIZE_64/2, 0,              HEAP_SIZE_MIN,       0},
+                                   {"HeapInitSize",         ENCLAVE_MAX_SIZE_64/2, 0,              HEAP_SIZE_MIN,       0},
+                                   {"ReservedMemMaxSize",   ENCLAVE_MAX_SIZE_64/2, 0,              RSRV_SIZE_MAX,       0},
+                                   {"ReservedMemMinSize",   ENCLAVE_MAX_SIZE_64/2, 0,              RSRV_SIZE_MIN,       0},
+                                   {"ReservedMemInitSize",  ENCLAVE_MAX_SIZE_64/2, 0,              RSRV_SIZE_MIN,       0},
+                                   {"ReservedMemExecutable",1,                     0,              0,                   0},
+                                   {"MiscSelect",           0x00FFFFFFFF,          0,              DEFAULT_MISC_SELECT, 0},
+                                   {"MiscMask",             0x00FFFFFFFF,          0,              DEFAULT_MISC_MASK,   0},
+                                   {"EnableKSS",            1,                     0,              0,                   0},
+                                   {"ISVFAMILYID_H",        ISVFAMILYID_MAX,       0,              0,                   0},
+                                   {"ISVFAMILYID_L",        ISVFAMILYID_MAX ,      0,              0,                   0},
+                                   {"ISVEXTPRODID_H",       ISVEXTPRODID_MAX,      0,              0,                   0},
+                                   {"ISVEXTPRODID_L",       ISVEXTPRODID_MAX,      0,              0,                   0},
+                                   {"EnclaveImageAddress",  0xFFFFFFFFFFFFFFFF,    0x1000,         0,                   0},
+                                   {"ELRangeStartAddress",  0xFFFFFFFFFFFFFFFF,    0,              0,                   0},
+                                   {"ELRangeSize",          0xFFFFFFFFFFFFFFFF,    0x1000,         0,                   0},
+                                   {"PKRU",                 FEATURE_LOADER_SELECTS,                     FEATURE_MUST_BE_DISABLED,              FEATURE_MUST_BE_DISABLED,                   0},
+                                   {"AMX",                  FEATURE_LOADER_SELECTS,                     FEATURE_MUST_BE_DISABLED,              FEATURE_MUST_BE_DISABLED,                   0},
+                                   {"UserRegionSize",       ENCLAVE_MAX_SIZE_64/2, 0,              USER_REGION_SIZE,    0},
+                                   {"EnableAEXNotify",      1,                     0,              0,                   0}};
     const char *path[8] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
     uint8_t enclave_hash[SGX_HASH_SIZE] = {0};
-    metadata_t metadata;
+    uint8_t metadata_raw[METADATA_SIZE];
+    metadata_t *metadata = (metadata_t*)metadata_raw;
     int res = -1, mode = -1;
     int key_type = UNIDENTIFIABLE_KEY; //indicate the type of the input key file
     size_t parameter_count = sizeof(parameter)/sizeof(parameter[0]);
-    bin_fmt_t bin_fmt = BF_UNKNOWN;
     uint64_t meta_offset = 0;
-    bool ignore_rel_error = false;
-    rsa_params_t rsa;
+    uint32_t option_flag_bits = 0;
+     EVP_PKEY *pkey = NULL;
+    memset(&metadata_raw, 0, sizeof(metadata_raw));
+    uint8_t meta_versions = 0;
 
-    memset(&rsa,      0, sizeof(rsa));
-    memset(&metadata, 0, sizeof(metadata));
+    OPENSSL_init_crypto(0, NULL);
 
     //Parse command line
-    if(cmdline_parse(argc, argv, &mode, path, &ignore_rel_error) == false)
+    if(cmdline_parse(argc, argv, &mode, path, &option_flag_bits) == false)
     {
         se_trace(SE_TRACE_ERROR, USAGE_STRING);
         goto clear_return;
     }
-    if(mode == -1) // User only wants to get the help info
+    if(mode == -1) // User only wants to get the help info or version info
     {
-        return 0;
-    }
-    else if(mode == COMPARE)
-    {
-        //compare two enclaves
-
-        //Parse the xml file to get the metadata
-        if(parse_metadata_file(path[XML], parameter, (int)parameter_count) == false)
-        {
-            goto clear_return;
-        }
-        if(compare_enclave(path, parameter) == false)
-        {
-            se_trace(SE_TRACE_ERROR, "The two enclaves are not matched\n");
-            return -1;
-        }
-        se_trace(SE_TRACE_ERROR, "The two enclaves are matched\n");
-        return 0;
+        res = 0;
+        goto clear_return;
     }
     else if(mode == DUMP)
     {
         // dump metadata info
-        if(dump_enclave_metadata(path[DLL], path[DUMPFILE]) == false)
+        if(dump_enclave_metadata(path[DLL], path[DUMPFILE], path[CSSFILE]) == false)
         {
             se_trace(SE_TRACE_ERROR, DUMP_METADATA_ERROR, path[DUMPFILE]);
-            return -1;
+            goto clear_return;
         }
-        else
-        {
-            se_trace(SE_TRACE_ERROR, SUCCESS_EXIT);
-            return 0;
-        }
+        se_trace(SE_TRACE_ERROR, SUCCESS_EXIT);
+        res = 0;
+        goto clear_return;
     }
-    
+
     //Other modes
     //
     //Parse the xml file to get the metadata
@@ -1248,7 +1424,7 @@ int main(int argc, char* argv[])
         goto clear_return;
     }
     //Parse the key file
-    if(parse_key_file(path[KEY], &rsa, &key_type) == false && key_type != NO_KEY) 
+    if(parse_key_file(mode, path[KEY], &pkey, &key_type) == false && key_type != NO_KEY)
     {
         goto clear_return;
     }
@@ -1258,13 +1434,12 @@ int main(int argc, char* argv[])
         goto clear_return;
     }
 
-    if(measure_enclave(enclave_hash, path[OUTPUT], parameter, ignore_rel_error, &metadata, &bin_fmt, &meta_offset) == false)
+    if(measure_enclave(enclave_hash, path[OUTPUT], parameter, option_flag_bits, metadata, &meta_offset, &meta_versions) == false)
     {
         se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
         goto clear_return;
     }
-
-    if((generate_output(mode, key_type, enclave_hash, parameter, &rsa, &metadata, path, bin_fmt, meta_offset)) == false)
+    if((generate_output(mode, key_type, enclave_hash, pkey, metadata, path)) == false)
     {
         se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
         goto clear_return;
@@ -1273,29 +1448,49 @@ int main(int argc, char* argv[])
     //to verify
     if(mode == SIGN || mode == CATSIG)
     {
-        int signature_verified = ippFalse;
-        if(verify_signature(&rsa, &(metadata.enclave_css), &signature_verified) == false || signature_verified != ippTrue)
+        if(verify_signature(pkey, &(metadata->enclave_css)) == false)
+        {
+            se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
+            goto clear_return;
+        }
+        if(false == generate_compatible_metadata(metadata, parameter, meta_versions))
+        {
+            se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
+            goto clear_return;
+        }
+        if(false == update_metadata(path[OUTPUT], metadata, meta_offset))
         {
             se_trace(SE_TRACE_ERROR, OVERALL_ERROR);
             goto clear_return;
         }
     }
-    
+
     if(path[DUMPFILE] != NULL)
     {
-        if(print_metadata(path[DUMPFILE], &metadata) == false)
+        if(print_metadata(path[DUMPFILE], metadata) == false)
         {
             se_trace(SE_TRACE_ERROR, DUMP_METADATA_ERROR, path[DUMPFILE]);
             goto clear_return;
         }
     }
+    if (path[CSSFILE] != NULL)
+    {
+        if (write_data_to_file(path[CSSFILE], std::ios::binary | std::ios::out,
+            (uint8_t *)&(metadata->enclave_css), sizeof(enclave_css_t)) == false)
+            goto clear_return;
+    }
+
     se_trace(SE_TRACE_ERROR, SUCCESS_EXIT);
     res = 0;
 
 clear_return:
+    if(pkey)
+        EVP_PKEY_free(pkey);
     if(res == -1 && path[OUTPUT])
         remove(path[OUTPUT]);
     if(res == -1 && path[DUMPFILE])
         remove(path[DUMPFILE]);
+    if(res == -1 && path[CSSFILE])
+        remove(path[CSSFILE]);
     return res;
 }

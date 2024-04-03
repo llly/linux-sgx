@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,9 +33,10 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include "sgx_lfence.h"
 #include "simple_vector.h"
 
-//initial vector capacity when fisrt item is added to vector
+//initial vector capacity when first item is added to vector
 #define INIT_SIZE 10
 
 //max vector capacity of a vector
@@ -52,7 +53,7 @@ void vector_init(simple_vector* v)
     }
 }
 
-//return current number of items the vector holds  
+//return current number of items the vector holds
 uint32_t vector_size(const simple_vector* v)
 {
     if (v)
@@ -101,6 +102,10 @@ errno_t vector_get(const simple_vector* v, uint32_t index, void** data)
 {
     if (!v || index >= v->size || !data)
         return 1;
+
+    //fence after boundary check
+    sgx_lfence();
+
     *data = v->data[index];
     return 0;
 }

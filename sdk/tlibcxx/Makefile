@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -50,7 +50,7 @@ CPPFLAGS += -I$(ROOT_DIR)/android/ndk-toolchain/sysroot/usr/include
 endif   #ANDROID
 
 CPP_SRCS := $(wildcard src/*.cpp)
-CPP_OBJS := $(CPP_SRCS:.cpp=.o)
+CPP_OBJS := $(sort $(CPP_SRCS:.cpp=.o))
 
 OBJS     := $(CPP_OBJS)
 

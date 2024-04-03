@@ -1,10 +1,9 @@
 // -*- C++ -*-
 //===--------------------------- cwctype ----------------------------------===//
 //
-//                     The LLVM Compiler Infrastructure
-//
-// This file is dual licensed under the MIT and the University of Illinois Open
-// Source Licenses. See LICENSE.TXT for details.
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
 
@@ -64,7 +63,6 @@ using ::wint_t;
 using ::wctrans_t;
 using ::wctype_t;
 
-#ifndef _LIBCPP_SGX_CONFIG
 #ifdef iswalnum
 inline _LIBCPP_INLINE_VISIBILITY int __libcpp_iswalnum(wint_t __wc) {return iswalnum(__wc);}
 #undef iswalnum
@@ -208,7 +206,6 @@ inline _LIBCPP_INLINE_VISIBILITY wctrans_t wctrans(const char* __p) {return __li
 #else  // wctrans
 using ::wctrans;
 #endif
-#endif //_LIBCPP_SGX_CONFIG
 
 _LIBCPP_END_NAMESPACE_STD
 

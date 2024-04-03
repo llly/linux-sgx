@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -30,6 +30,7 @@
 #
 
 TOP_DIR := ../../..
+MITIGATION-CVE-2020-0551=LOAD
 include ../buildenv.mk
 
 CXXFLAGS  += -Werror
@@ -37,43 +38,39 @@ CFLAGS    += -Werror
 
 AENAME = pce
 
-LINUX_EPID := $(LINUX_EXTERNAL_DIR)/epid/ -lepid
+PCE_VER:= $(shell awk '$$2 ~ /PCE/ { print substr($$3, 2, length($$3) - 2); }' $(COMMON_DIR)/inc/internal/se_version.h)
+
 INCLUDE += -I$(LINUX_PSW_DIR)/ae/data/constants/linux 
 
-INCLUDE += -I$(COMMON_DIR)/inc/tlibc                      \
-           -I$(SGX_IPP_INC)/                              \
-           -I$(LINUX_EXTERNAL_DIR)/epid                   \
-           -I$(LINUX_SDK_DIR)/tseal                       \
+INCLUDE += -I$(SGX_HEADER_DIR)/libcxx                      \
+           -I$(EPID_SDK_DIR)                              \
            -I$(LINUX_PSW_DIR)/ae/common                   \
-           -I$(LINUX_PSW_DIR)/ae/inc/internal
-
-TCRYPTO_LIBDIR := $(LINUX_SDK_DIR)/tlibcrypto
-EPID_LIBDIR    := $(LINUX_EPID)
-
-EXTERNAL_LIB += -L$(TCRYPTO_LIBDIR) -lsgx_tcrypto
+           -I$(LINUX_PSW_DIR)/ae/inc/internal             
 
 SRC := $(wildcard *.cpp)
-SRC += ipp_bn.cpp                    \
-       ipp_rsa_pub_key.cpp
 
 OBJ := $(SRC:.cpp=.o)
 OBJS := $(sort $(OBJ) version.o)
 
 .PHONY: all
-all: $(SONAME) 
+all: $(SONAME)
 
+ifneq ($(SGX_MODE), HW)
+all: pce_sim_private_key.pem
+	$(SGXSIGN) sign -key pce_sim_private_key.pem -enclave $(SONAME) -out libsgx_$(AENAME).signed.so -config $(CONFIG)
+endif
 
 $(SONAME): $(OBJS)
-	$(CXX) $(CXXFLAGS) -o $@  $(OBJS)  -nostdlib -nodefaultlibs -nostartfiles $(LDTFLAGS) -fno-exceptions -fno-rtti $(EXTERNAL_LIB)
-	$(STRIP)  --strip-unneeded $(SONAME)
+	$(CXX) $(CXXFLAGS) -o $@  $(OBJS)  -nostdlib -nodefaultlibs -nostartfiles -Wl,-soname=libsgx_$(AENAME).signed.so.$(call SPLIT_VERSION,$(PCE_VER),1) $(LDTFLAGS)
+	$(STRIP) --strip-unneeded --remove-section=.comment --remove-section=.note $(SONAME)
 
 pce.o: $(AENAME)_t.c
 
 %.o:%.cpp 
-	$(CXX) $(CXXFLAGS) $(INCLUDE) $(DEFINES) -fno-exceptions -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(INCLUDE) $(DEFINES) -fno-exceptions -fno-rtti -c $< -o $@
 
 $(AENAME)_t.c: $(AENAME).edl
-	@$(EDGER8R) --trusted $<
+	@$(EDGER8R) --trusted $< --search-path $(SGX_HEADER_DIR)
 
 $(BUILD_DIR):
 	@$(MKDIR) $@

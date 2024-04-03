@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -89,6 +89,10 @@ sgx_status_t SGXAPI sgx_ecall(const sgx_enclave_id_t eid,
                               const int index,
                               const void* ocall_table,
                               void* ms);
+sgx_status_t SGXAPI sgx_ecall_switchless(const sgx_enclave_id_t eid,
+                              const int index,
+                              const void* ocall_table,
+                              void* ms);
 
 /* sgx_ocall()
  * Parameters:
@@ -98,6 +102,8 @@ sgx_status_t SGXAPI sgx_ecall(const sgx_enclave_id_t eid,
  *     SGX_SUCCESS on success
 */
 sgx_status_t SGXAPI sgx_ocall(const unsigned int index,
+                              void* ms);
+sgx_status_t SGXAPI sgx_ocall_switchless(const unsigned int index,
                               void* ms);
 
 #ifdef __cplusplus

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -42,22 +42,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
-
-
-/**
- * In SE, the page size is defined by macro `SE_PAGE_SIZE'.
- */
-int getpagesize(void)
-{
-    return SE_PAGE_SIZE;
-}
-
-int mincore(void *addr, size_t length, unsigned char *vec)
-{
-    assert(sgx_is_within_enclave(addr, length));
-
-    return 0;
-}
 
 char *strdup(const char *s)
 {

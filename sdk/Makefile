@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -29,11 +29,28 @@
 #
 #
 
+include ../buildenv.mk
 
-ifneq ($(USE_OPT_LIBS), 0)
-include Makefile.opt_lib
-else
 include Makefile.source
+
+# SDK requires prebuilt IPP libraries.
+CHECK_OPT :=
+ifeq ("$(wildcard $(LINUX_EXTERNAL_DIR)/ippcp_internal/lib/linux/intel64)", "")
+CHECK_OPT := opt_check_failed
+endif
+
+.PHONY: opt_check_failed
+opt_check_failed:
+	@echo "ERROR: Please run 'download_prebuilt.sh' to download the prebuilt optimized libraries before compiling."
+	@echo "Exiting......"
+	@exit 3
+
+.PHONY: all
+all: $(CHECK_OPT)
+	$(MAKE) components
+ifneq ($(MITIGATION-CVE-2020-0551),)
+	$(RM) -r $(BUILD_DIR)$(MITIGATION-CVE-2020-0551)
+	mv $(BUILD_DIR) $(BUILD_DIR)$(MITIGATION-CVE-2020-0551)
 endif
 
 .PHONY: rebuild

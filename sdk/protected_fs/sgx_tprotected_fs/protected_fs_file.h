@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -39,7 +39,7 @@
 #include "sgx_error.h"
 #include "sgx_tcrypto.h"
 #include "errno.h"
-
+#include <queue>
 #include <sgx_thread.h>
 #include "sgx_tprotected_fs.h"
 
@@ -52,19 +52,15 @@ typedef enum
 	SGX_FILE_STATUS_CRYPTO_ERROR,
 	SGX_FILE_STATUS_CORRUPTED,
 	SGX_FILE_STATUS_MEMORY_CORRUPTED,
-	//SGX_FILE_STATUS_WRITE_TO_DISK_FAILED_NEED_MC,
-	//SGX_FILE_STATUS_MC_NOT_INCREMENTED,
 	SGX_FILE_STATUS_CLOSED,
 } protected_fs_status_e;
 
-/* copied from tseal_internal.h */
-/* set MISCMASK.exinfo_bit = 0 for data migration to the enclave
-   built with the SDK that supports exinfo bit */
-#define SGX_MISCSEL_EXINFO     0x00000001  /* report #PF and #GP inside enclave */
-#define TSEAL_DEFAULT_MISCMASK (~SGX_MISCSEL_EXINFO)
-/* end of copied... */
+#ifndef SE_PAGE_SIZE
+#define SE_PAGE_SIZE 0x1000
+#endif
 
 #define MAX_PAGES_IN_CACHE 48
+#define DEFAULT_CACHE_SIZE	(MAX_PAGES_IN_CACHE * SE_PAGE_SIZE)
 
 COMPILE_TIME_ASSERT(filename_length, FILENAME_MAX_LEN == FILENAME_MAX);
 
@@ -82,6 +78,22 @@ typedef union
 	};
 	uint8_t raw;
 } open_mode_t;
+
+
+typedef struct _thread_queue
+{
+	sgx_aes_gcm_128bit_key_t key;
+	void* node;
+} thread_queue_t;
+
+
+typedef struct _thread_input
+{
+	uint32_t error;
+	uint8_t* addr;
+	uint8_t* empty_iv;
+	std::queue<thread_queue_t*>* queue;
+} thread_input_t;
 
 
 #define FILE_MHT_NODE_TYPE  1
@@ -106,13 +118,7 @@ typedef struct _file_mht_node
 	struct _file_mht_node* parent;
 	bool need_writing;
 	bool new_node;
-	union {
-		struct {
-			uint64_t physical_node_number;
-			encrypted_node_t encrypted; // the actual data from the disk
-		};
-		recovery_node_t recovery_node;
-	};
+	uint64_t physical_node_number;
 	/* from here the structures are different */
 	mht_node_t plain; // decrypted data
 } file_mht_node_t;
@@ -126,13 +132,7 @@ typedef struct _file_data_node
 	file_mht_node_t* parent;
 	bool need_writing;
 	bool new_node;
-	union {
-		struct {
-			uint64_t physical_node_number;
-			encrypted_node_t encrypted; // the actual data from the disk
-		};
-		recovery_node_t recovery_node;
-	};
+	uint64_t physical_node_number;
 	/* from here the structures are different */
 	data_node_t plain; // decrypted data
 } file_data_node_t;
@@ -141,32 +141,32 @@ typedef struct _file_data_node
 class protected_fs_file
 {
 private:
-	union {
-		struct {
-			uint64_t meta_data_node_number; // for recovery purpose, so it is easy to write this node
-			meta_data_node_t file_meta_data; // actual data from disk's meta data node
-		};
-		recovery_node_t meta_data_recovery_node;
+	struct {
+		uint64_t meta_data_node_number; // for recovery purpose, so it is easy to write this node
+		meta_data_node_t file_meta_data; // actual data from disk's meta data node
 	};
 
 	meta_data_encrypted_t encrypted_part_plain; // encrypted part of meta data node, decrypted
 	
 	file_mht_node_t root_mht; // the root of the mht is always needed (for files bigger than 3KB)
 
-	FILE* file; // OS's FILE pointer
+	uint8_t* file_addr; // start address of the memory mapped from file
 	
 	open_mode_t open_mode;
 	uint8_t read_only;
 	int64_t offset; // current file position (user's view)
 	bool end_of_file; // flag
+	uint32_t max_cache_page;
 
 	int64_t real_file_size;
-	
+
 	bool need_writing; // flag
 	uint32_t last_error; // last operation error
 	protected_fs_status_e file_status;
 	
 	sgx_thread_mutex_t mutex;
+
+	uint32_t parallel_flush_level;
 
 	uint8_t use_user_kdk_key;
 	sgx_aes_gcm_128bit_key_t user_kdk_key; // recieved from user, used instead of the seal key
@@ -175,6 +175,7 @@ private:
 	sgx_aes_gcm_128bit_key_t session_master_key;
 	uint32_t master_key_count;
 	
+	char file_name[FULLNAME_MAX_LEN]; // used for u_sgxprotectedfs_file_remap
 	char recovery_filename[RECOVERY_FILE_MAX_LEN]; // might include full path to the file
 
 	lru_cache cache;
@@ -183,7 +184,7 @@ private:
 	sgx_iv_t empty_iv;
 	sgx_report_t report;
 
-	void init_fields();
+	void init_fields(const uint32_t cache_page);
 	bool cleanup_filename(const char* src, char* dest);
 	bool parse_mode(const char* mode);
 	bool file_recovery(const char* filename);
@@ -205,27 +206,28 @@ private:
 	file_mht_node_t* read_mht_node(uint64_t mht_node_number);
 	file_mht_node_t* append_mht_node(uint64_t mht_node_number);
 	bool write_recovery_file();
-	bool set_update_flag(bool flush_to_disk);
-	void clear_update_flag();
+	bool set_update_flag();
+	bool multi_thread_update_data_nodes();
+	bool single_thread_update_data_nodes();
 	bool update_all_data_and_mht_nodes();
 	bool update_meta_data_node();
-	bool write_all_changes_to_disk(bool flush_to_disk);
 	void erase_recovery_file();
-	bool internal_flush(/*bool mc,*/ bool flush_to_disk);
+	bool internal_flush();
 
 public:
-	protected_fs_file(const char* filename, const char* mode, const sgx_aes_gcm_128bit_key_t* import_key, const sgx_aes_gcm_128bit_key_t* kdk_key);
+	protected_fs_file(const char* filename, const char* mode, const sgx_aes_gcm_128bit_key_t* import_key, const sgx_aes_gcm_128bit_key_t* kdk_key, const uint32_t cache_page);
 	~protected_fs_file();
 
 	size_t write(const void* ptr, size_t size, size_t count);
 	size_t read(void* ptr, size_t size, size_t count);
 	int64_t tell();
 	int seek(int64_t new_offset, int origin);
+	int32_t set_parallel_flush_level(uint32_t max_threads_number);
 	bool get_eof();
 	uint32_t get_error();
 	void clear_error();
 	int32_t clear_cache();
-	bool flush(/*bool mc*/);
+	bool flush();
 	bool pre_close(sgx_key_128bit_t* key, bool import);
 	static int32_t remove(const char* filename);
 };

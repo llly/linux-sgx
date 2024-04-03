@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -87,6 +87,89 @@ static const sample_ec_pub_t g_sp_pub_key = {
     }
 };
 
+// This is a hardcode sgx_ql_att_key_id_list_t with one sgx_att_key_id_ext_t in
+// it. The sgx_att_key_id_ext_t consists of the intel QE3's measurements.
+// Using this hardcode sgx_ql_att_key_id_list_t ensures the AESM will only use
+// Intel QE3 to generate the ECDSA quote.
+const uint8_t g_ecdsa_p256_att_key_id_list[] = {
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x8c, 0x4f,
+    0x57, 0x75, 0xd7, 0x96, 0x50, 0x3e, 0x96, 0x13,
+    0x7f, 0x77, 0xc6, 0x8a, 0x82, 0x9a, 0x00, 0x56,
+    0xac, 0x8d, 0xed, 0x70, 0x14, 0x0b, 0x08, 0x1b,
+    0x09, 0x44, 0x90, 0xc5, 0x7b, 0xff, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+// This is a hardcode sgx_ql_att_key_id_list_t with one sgx_att_key_id_ext_t in
+// it. The sgx_att_key_id_ext_t consists of the intel EPID QE's measurements.
+// Using this hardcode sgx_ql_att_key_id_list_t ensures the AESM will only use
+// Intel EPID QE to generate the EPID quote. It also set att_key_type to
+// SGX_UNLINKABLE_SIGNATURE(0), so Intel EPID QE will generate an unlinkable
+// EPID quote.
+const uint8_t g_epid_unlinkable_att_key_id_list[] = {
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0xec, 0x15,
+    0xb1, 0x07, 0x87, 0xd2, 0xf8, 0x46, 0x67, 0xce,
+    0xb0, 0xb5, 0x98, 0xff, 0xc4, 0x4a, 0x1f, 0x1c,
+    0xb8, 0x0f, 0x67, 0x0a, 0xae, 0x5d, 0xf9, 0xe8,
+    0xfa, 0x9f, 0x63, 0x76, 0xe1, 0xf8, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+};
+
+
 // This is a context data structure used on SP side
 typedef struct _sp_db_item_t
 {
@@ -103,21 +186,26 @@ static sp_db_item_t g_sp_db;
 
 static const sample_extended_epid_group* g_sp_extended_epid_group_id= NULL;
 static bool g_is_sp_registered = false;
+static bool g_return_ecdsa_att_key_id = true;
 static int g_sp_credentials = 0;
 static int g_authentication_token = 0;
 
-uint8_t g_secret[8] = {0,1,2,3,4,5,6,7};
+uint8_t g_secret[] = {0,1,2,3,4,5,6,7};
 
 sample_spid_t g_spid;
 
 
 // Verify message 0 then configure extended epid group.
 int sp_ra_proc_msg0_req(const sample_ra_msg0_t *p_msg0,
-    uint32_t msg0_size)
+    uint32_t msg0_size,
+    ra_samp_response_header_t **pp_msg0_resp)
 {
     int ret = -1;
+    uint32_t msg0_resp_size = 0;
+    ra_samp_response_header_t* p_msg0_resp_full = NULL;
 
     if (!p_msg0 ||
+        !pp_msg0_resp ||
         (msg0_size != sizeof(sample_ra_msg0_t)))
     {
         return -1;
@@ -147,18 +235,76 @@ int sp_ra_proc_msg0_req(const sample_ra_msg0_t *p_msg0,
                 if (0 != ret)
                 {
                     ret = SP_IAS_FAILED;
-                    break;
+                    goto CLEANUP;
                 }
 
                 g_is_sp_registered = true;
-                ret = SP_OK;
                 break;
             }
         }
     }
+
+    // Return ECDSA attestation key id first
+    if (g_return_ecdsa_att_key_id)
+    {
+        msg0_resp_size = (uint32_t)sizeof(g_ecdsa_p256_att_key_id_list);
+        // Next time we will return EPID attestation key id
+    }
+    else // Return EPID attestation key id
+    {
+        msg0_resp_size = (uint32_t)sizeof(g_epid_unlinkable_att_key_id_list);
+    }
+
+    p_msg0_resp_full = (ra_samp_response_header_t*)malloc(msg0_resp_size
+        + sizeof(ra_samp_response_header_t));
+    if(!p_msg0_resp_full)
+    {
+        fprintf(stderr, "\nError, out of memory in [%s].", __FUNCTION__);
+        ret = SP_INTERNAL_ERROR;
+    }
     else
     {
+        memset(p_msg0_resp_full, 0, msg0_resp_size + sizeof(ra_samp_response_header_t));
+
+        if (g_return_ecdsa_att_key_id)
+        {
+            if (memcpy_s(p_msg0_resp_full->body, msg0_resp_size,
+                g_ecdsa_p256_att_key_id_list, msg0_resp_size)) {
+                fprintf(stderr, "\nError, cannot do memcpy in [%s].", __FUNCTION__);
+                g_return_ecdsa_att_key_id = false;
+                ret = SP_INTERNAL_ERROR;
+                goto CLEANUP;
+            }
+            g_return_ecdsa_att_key_id = false;
+        }
+        else // Return EPID attestation key id
+        {
+            if(memcpy_s(p_msg0_resp_full->body, msg0_resp_size,
+                g_epid_unlinkable_att_key_id_list, msg0_resp_size)) {
+                fprintf(stderr, "\nError, cannot do memcpy in [%s].", __FUNCTION__);
+                ret = SP_INTERNAL_ERROR;
+                 goto CLEANUP;
+            }
+        }
+        p_msg0_resp_full->type = TYPE_RA_MSG0;
+        p_msg0_resp_full->size = msg0_resp_size;
+        // The simulated message0 always passes.  This would need to be set
+        // accordingly in a real service provider implementation.
+        p_msg0_resp_full->status[0] = 0;
+        p_msg0_resp_full->status[1] = 0;
         ret = SP_OK;
+    }
+
+CLEANUP:
+    if(ret)
+    {
+        *pp_msg0_resp = NULL;
+        SAFE_FREE(p_msg0_resp_full);
+    }
+    else
+    {
+        // Freed by the network simulator in ra_free_network_response_buffer
+        *pp_msg0_resp = p_msg0_resp_full;
     }
 
     return ret;
@@ -193,13 +339,14 @@ int sp_ra_proc_msg1_req(const sample_ra_msg1_t *p_msg1,
     {
         // Get the sig_rl from attestation server using GID.
         // GID is Base-16 encoded of EPID GID in little-endian format.
-        // In the product, the SP and attesation server uses an established channel for
+        // In the product, the SP and attestation server uses an established channel for
         // communication.
         uint8_t* sig_rl;
         uint32_t sig_rl_size = 0;
 
         // The product interface uses a REST based message to get the SigRL.
-        
+        //! Refer to the attestation server API for more information on how to communicate to
+        //! the real attestation server.
         ret = g_sp_extended_epid_group_id->get_sigrl(p_msg1->gid, &sig_rl_size, &sig_rl);
         if(0 != ret)
         {
@@ -208,7 +355,7 @@ int sp_ra_proc_msg1_req(const sample_ra_msg1_t *p_msg1,
             break;
         }
 
-        // Need to save the client's public ECCDH key to local storage
+        // Need to save the client's public ECDH key to local storage
         if (memcpy_s(&g_sp_db.g_a, sizeof(g_sp_db.g_a), &p_msg1->g_a,
                      sizeof(p_msg1->g_a)))
         {
@@ -217,7 +364,7 @@ int sp_ra_proc_msg1_req(const sample_ra_msg1_t *p_msg1,
             break;
         }
 
-        // Generate the Service providers ECCDH key pair.
+        // Generate the Service providers ECDH key pair.
         sample_ret = sample_ecc256_open_context(&ecc_state);
         if(SAMPLE_SUCCESS != sample_ret)
         {
@@ -238,7 +385,7 @@ int sp_ra_proc_msg1_req(const sample_ra_msg1_t *p_msg1,
             break;
         }
 
-        // Need to save the SP ECCDH key pair to local storage.
+        // Need to save the SP ECDH key pair to local storage.
         if(memcpy_s(&g_sp_db.b, sizeof(g_sp_db.b), &priv_key,sizeof(priv_key))
            || memcpy_s(&g_sp_db.g_b, sizeof(g_sp_db.g_b),
                        &pub_key,sizeof(pub_key)))
@@ -323,7 +470,7 @@ int sp_ra_proc_msg1_req(const sample_ra_msg1_t *p_msg1,
         }
 #endif
 
-        uint32_t msg2_size = sizeof(sample_ra_msg2_t) + sig_rl_size;
+        uint32_t msg2_size = (uint32_t)sizeof(sample_ra_msg2_t) + sig_rl_size;
         p_msg2_full = (ra_samp_response_header_t*)malloc(msg2_size
                       + sizeof(ra_samp_response_header_t));
         if(!p_msg2_full)
@@ -442,7 +589,7 @@ int sp_ra_proc_msg3_req(const sample_ra_msg3_t *p_msg3,
     int ret = 0;
     sample_status_t sample_ret = SAMPLE_SUCCESS;
     const uint8_t *p_msg3_cmaced = NULL;
-    sample_quote_t *p_quote = NULL;
+    const sample_quote_t *p_quote = NULL;
     sample_sha_state_handle_t sha_handle = NULL;
     sample_report_data_t report_data = {0};
     sample_ra_att_result_msg_t *p_att_result_msg = NULL;
@@ -472,7 +619,7 @@ int sp_ra_proc_msg3_req(const sample_ra_msg3_t *p_msg3,
             break;
         }
         //Make sure that msg3_size is bigger than sample_mac_t.
-        uint32_t mac_size = msg3_size - sizeof(sample_mac_t);
+        uint32_t mac_size = msg3_size - (uint32_t)sizeof(sample_mac_t);
         p_msg3_cmaced = reinterpret_cast<const uint8_t*>(p_msg3);
         p_msg3_cmaced += sizeof(sample_mac_t);
 
@@ -506,7 +653,7 @@ int sp_ra_proc_msg3_req(const sample_ra_msg3_t *p_msg3,
             break;
         }
 
-        p_quote = (sample_quote_t *)p_msg3->quote;
+        p_quote = (const sample_quote_t*)p_msg3->quote;
 
         // Check the quote version if needed. Only check the Quote.version field if the enclave
         // identity fields have changed or the size of the quote has changed.  The version may
@@ -564,7 +711,7 @@ int sp_ra_proc_msg3_req(const sample_ra_msg3_t *p_msg3,
             break;
         }
         ret = memcmp((uint8_t *)&report_data,
-                     (uint8_t *)&(p_quote->report_body.report_data),
+                     &(p_quote->report_body.report_data),
                      sizeof(report_data));
         if(ret)
         {
@@ -579,7 +726,9 @@ int sp_ra_proc_msg3_req(const sample_ra_msg3_t *p_msg3,
         // Verify quote with attestation server.
         // In the product, an attestation server could use a REST message and JSON formatting to request
         // attestation Quote verification.  The sample only simulates this interface.
-        ias_att_report_t attestation_report = {0};
+        //! Please refer to the attestation server API for more details on this interface.
+        ias_att_report_t attestation_report;
+        memset(&attestation_report, 0, sizeof(attestation_report));
         ret = g_sp_extended_epid_group_id->verify_attestation_evidence(p_quote, NULL,
                                               &attestation_report);
         if(0 != ret)
@@ -588,7 +737,7 @@ int sp_ra_proc_msg3_req(const sample_ra_msg3_t *p_msg3,
             break;
         }
         FILE* OUTPUT = stdout;
-        fprintf(OUTPUT, "\n\n\tAtestation Report:");
+        fprintf(OUTPUT, "\n\n\tAttestation Report:");
         fprintf(OUTPUT, "\n\tid: 0x%0x.", attestation_report.id);
         fprintf(OUTPUT, "\n\tstatus: %d.", attestation_report.status);
         fprintf(OUTPUT, "\n\trevocation_reason: %u.",
@@ -596,7 +745,7 @@ int sp_ra_proc_msg3_req(const sample_ra_msg3_t *p_msg3,
         // attestation_report.info_blob;
         fprintf(OUTPUT, "\n\tpse_status: %d.",  attestation_report.pse_status);
         // Note: This sample always assumes the PIB is sent by attestation server.  In the product
-        // implementation, the attestation server could only send the PIB for certain attestation 
+        // implementation, the attestation server could only send the PIB for certain attestation
         // report statuses.  A product SP implementation needs to handle cases
         // where the PIB is zero length.
 
@@ -676,10 +825,10 @@ int sp_ra_proc_msg3_req(const sample_ra_msg3_t *p_msg3,
         fprintf(OUTPUT, "\n\tisv_svn: 0x%0x",p_quote->report_body.isv_svn);
         fprintf(OUTPUT, "\n");
 
-        // A product service provider needs to verify that its enclave properties 
+        // A product service provider needs to verify that its enclave properties
         // match what is expected.  The SP needs to check these values before
         // trusting the enclave.  For the sample, we always pass the policy check.
-        // Attestation server only verifies the quote structure and signature.  It does not 
+        // Attestation server only verifies the quote structure and signature.  It does not
         // check the identity of the enclave.
         bool isv_policy_passed = true;
 
@@ -703,7 +852,7 @@ int sp_ra_proc_msg3_req(const sample_ra_msg3_t *p_msg3,
 
         // Generate shared secret and encrypt it with SK, if attestation passed.
         uint8_t aes_gcm_iv[SAMPLE_SP_IV_SIZE] = {0};
-        p_att_result_msg->secret.payload_size = 8;
+        p_att_result_msg->secret.payload_size = sizeof(g_secret);
         if((IAS_QUOTE_OK == attestation_report.status) &&
            (IAS_PSE_OK == attestation_report.pse_status) &&
            (isv_policy_passed == true))
@@ -732,7 +881,3 @@ int sp_ra_proc_msg3_req(const sample_ra_msg3_t *p_msg3,
     }
     return ret;
 }
-
-
-
-

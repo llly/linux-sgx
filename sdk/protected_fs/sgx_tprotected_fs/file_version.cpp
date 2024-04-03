@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -39,7 +39,7 @@
 extern "C" {
 #endif
 __attribute__((visibility("default")))
-const char * sgx_tprotectedfs_version = SGX_TPROTECTEDFS_VERSION_STR;
+char sgx_tprotectedfs_version[] = SGX_TPROTECTEDFS_VERSION_STR;
 #ifdef __cplusplus
 }
 #endif

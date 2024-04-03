@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -42,6 +42,7 @@
 #include "se_error_internal.h"
 #include "se_lock.hpp"
 #include "file.h"
+#include "sgx_enclave_common.h"
 
 // hardware mode
 class EnclaveCreatorHW : public EnclaveCreator
@@ -49,23 +50,28 @@ class EnclaveCreatorHW : public EnclaveCreator
 public:
     EnclaveCreatorHW();
     ~EnclaveCreatorHW();
-    int create_enclave(secs_t *secs, sgx_enclave_id_t *enclave_id, void **start_addr, bool ae);
+    int create_enclave(secs_t *secs, sgx_enclave_id_t *enclave_id, void **start_addr, const uint32_t ex_features, const void* ex_features_p[32]);
     int add_enclave_page(sgx_enclave_id_t enclave_id, void *source, uint64_t offset, const sec_info_t &sinfo, uint32_t attr);
     int init_enclave(sgx_enclave_id_t enclave_id, enclave_css_t *enclave_css, SGXLaunchToken *lc, le_prd_css_file_t *prd_css_file);
     int destroy_enclave(sgx_enclave_id_t enclave_id, uint64_t enclave_size);
     int initialize(sgx_enclave_id_t enclave_id);
     bool use_se_hw() const;
+    bool is_EDMM_supported(sgx_enclave_id_t enclave_id);
+    bool is_driver_compatible();
     int get_misc_attr(sgx_misc_attribute_t *sgx_misc_attr, metadata_t *metadata, SGXLaunchToken * const lc, uint32_t flag);
     bool get_plat_cap(sgx_misc_attribute_t *se_attr);
 private:
-    virtual bool open_se_device();
-    virtual void close_se_device();
+    virtual bool open_device();
+    virtual void close_device();
     int try_init_enclave(sgx_enclave_id_t enclave_id, enclave_css_t *enclave_css, token_t *launch);
-    int error_driver2urts(int driver_error);
+    int error_driver2urts(int driver_error, int err_no);
+    int error_api2urts(uint32_t api_error);
     se_file_handle_t    m_hdevice;
     Mutex               m_dev_mutex;
     bool                m_sig_registered;
     se_mutex_t          m_sig_mutex;
+    enclave_elrange_t   m_enclave_elrange;
+    int                 m_driver_type;
 };
 
 #endif

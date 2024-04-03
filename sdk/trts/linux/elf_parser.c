@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -39,7 +39,10 @@
 #include "util.h"
 #include "elf_util.h"
 #include "global_data.h"
-
+#include "trts_inst.h"
+#ifndef SE_SIM
+#include "emm_private.h"
+#endif
 static int elf_tls_aligned_virtual_size(const void *enclave_base,
                             size_t *aligned_virtual_size);
 
@@ -416,4 +419,165 @@ int elf_get_init_array(const void* enclave_base,
 
     return 0;
 }
+
+int elf_get_uninit_array(const void* enclave_base,
+        uintptr_t *uninit_array_addr, size_t *uninit_array_size)
+{
+    ElfW(Half) phnum = 0;
+    const ElfW(Ehdr) *ehdr = (const ElfW(Ehdr)*)enclave_base;
+    ElfW(Phdr) *phdr = get_phdr(ehdr);
+
+    if (!uninit_array_addr || !uninit_array_size)
+        return -1;
+
+    if (phdr == NULL)
+        return -1;  /* Invalid image. */
+
+    *uninit_array_addr = 0;
+    *uninit_array_size = 0;
+
+    /* Search for Dynamic segment */
+    for (; phnum < ehdr->e_phnum; phnum++, phdr++)
+    {
+        if (phdr->p_type == PT_DYNAMIC)
+        {
+            size_t      count;
+            size_t      n_dyn = phdr->p_filesz/sizeof(ElfW(Dyn));
+            ElfW(Dyn)   *dyn = GET_PTR(ElfW(Dyn), ehdr, phdr->p_paddr);
+
+            for (count = 0; count < n_dyn; count++, dyn++)
+            {
+                switch (dyn->d_tag)
+                {
+                    case DT_FINI_ARRAY:
+                        *uninit_array_addr = dyn->d_un.d_ptr;
+                        break;
+                    case DT_FINI_ARRAYSZ:
+                        *uninit_array_size = dyn->d_un.d_val;
+                        break;
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
+#ifndef SE_SIM
+static int has_text_relo(const ElfW(Ehdr) *ehdr, const ElfW(Phdr) *phdr, ElfW(Half) phnum)
+{
+    ElfW(Half) phi = 0;
+    int text_relo = 0;
+
+    for (; phi < phnum; phi++, phdr++)
+    {
+        if (phdr->p_type == PT_DYNAMIC)
+        {
+            size_t count;
+            size_t n_dyn = phdr->p_filesz/sizeof(ElfW(Dyn));
+            ElfW(Dyn) *dyn = GET_PTR(ElfW(Dyn), ehdr, phdr->p_paddr);
+
+            for (count = 0; count < n_dyn; count++, dyn++)
+            {
+                if (dyn->d_tag == DT_NULL)
+                    break;
+
+                if (dyn->d_tag == DT_TEXTREL)
+                {
+                    text_relo = 1;
+                    break;
+                }
+            }
+            break;
+        }
+    }
+    return text_relo;
+}
+
+sgx_status_t change_protection(void *enclave_base)
+{
+    ElfW(Half) phnum = 0;
+    const ElfW(Ehdr) *ehdr = (const ElfW(Ehdr)*)enclave_base;
+    const ElfW(Phdr) *phdr = get_phdr(ehdr);
+    uint64_t perms;
+    sgx_status_t status = SGX_ERROR_UNEXPECTED;
+
+    if (phdr == NULL)
+        return status;
+
+    int text_relocation = has_text_relo(ehdr, phdr, ehdr->e_phnum);
+
+    for (; phnum < ehdr->e_phnum; phnum++, phdr++)
+    {
+        if (text_relocation && (phdr->p_type == PT_LOAD) && ((phdr->p_flags & PF_W) == 0))
+        {
+            perms = 0;
+            size_t start = (size_t)enclave_base + (phdr->p_vaddr & (size_t)(~(SE_PAGE_SIZE-1)));
+            size_t end = (size_t)enclave_base + ((phdr->p_vaddr + phdr->p_memsz + SE_PAGE_SIZE - 1) & (size_t)(~(SE_PAGE_SIZE-1)));
+
+            if (phdr->p_flags & PF_R)
+                perms |= SGX_EMA_PROT_READ;
+            if (phdr->p_flags & PF_X)
+                perms |= SGX_EMA_PROT_EXEC;
+
+            if(mm_modify_permissions((void*)start, end - start, (int)perms) != 0)
+                return status;
+        }
+
+        if (phdr->p_type == PT_GNU_RELRO)
+        {
+            size_t start = (size_t)enclave_base + (phdr->p_vaddr & (size_t)(~(SE_PAGE_SIZE-1)));
+            size_t end = (size_t)enclave_base + ((phdr->p_vaddr + phdr->p_memsz + SE_PAGE_SIZE - 1) & (size_t)(~(SE_PAGE_SIZE-1)));
+            if ((start != end) &&
+                   mm_modify_permissions((void*)start, end - start, SGX_EMA_PROT_READ) != 0)
+                return status;
+        }
+    }
+
+    //The <ReservedMemMinSize> memory region's attributes has been set to RW if EDMM is supported by URTS.
+    //So do_eaccept() to accept these pages.
+    uint32_t i = 0;
+    for (i = 0; i < g_global_data.layout_entry_num; i++)
+    {
+        if (g_global_data.layout_table[i].entry.id == LAYOUT_ID_RSRV_MIN && g_global_data.layout_table[i].entry.si_flags ==  SI_FLAGS_RWX && g_global_data.layout_table[i].entry.page_count > 0)
+        {
+            if(mm_modify_permissions((void*)((size_t)enclave_base + g_global_data.layout_table[i].entry.rva), 
+                                             (size_t)g_global_data.layout_table[i].entry.page_count << SE_PAGE_SHIFT, 
+                                                     SGX_EMA_PROT_READ|SGX_EMA_PROT_WRITE) != 0)
+                return status;
+            break;
+        }
+    }
+    return SGX_SUCCESS;
+}
+
+int init_segment_emas(void* enclave_base)
+{
+
+    ElfW(Half) phnum = 0;
+    const ElfW(Ehdr) *ehdr = (const ElfW(Ehdr)*)enclave_base;
+    const ElfW(Phdr) *phdr = get_phdr(ehdr);
+    uint64_t perms;
+    if (phdr == NULL) return -1;
+    int text_relocation = has_text_relo(ehdr, phdr, ehdr->e_phnum);
+    for (; phnum < ehdr->e_phnum; phnum++, phdr++)
+    {
+        if (phdr->p_type == PT_LOAD)
+        {
+            perms = SGX_EMA_PROT_READ;
+            size_t start = (size_t)enclave_base + (phdr->p_vaddr & (size_t)(~(SE_PAGE_SIZE-1)));
+            size_t end = (size_t)enclave_base + ((phdr->p_vaddr + phdr->p_memsz + SE_PAGE_SIZE - 1) & (size_t)(~(SE_PAGE_SIZE-1)));
+
+            if (phdr->p_flags & PF_W || text_relocation)
+                perms |= SGX_EMA_PROT_WRITE;
+            if (phdr->p_flags & PF_X)
+                perms |= SGX_EMA_PROT_EXEC;
+
+            if (mm_init_ema((void*)start, end - start, SGX_EMA_SYSTEM | SGX_EMA_PAGE_TYPE_REG, (int)perms, NULL, NULL) != 0)
+                return -1;
+        }
+    }
+    return 0;
+}
+#endif
 /* vim: set ts=4 sw=4 et cin: */

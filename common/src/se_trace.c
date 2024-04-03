@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,20 +29,47 @@
  *
  */
 
-
 #include "se_trace.h"
 #include <stdarg.h>
-int se_trace_internal(int debug_level, const char *fmt, ...)
+
+void sgx_proc_log_report_default(int channel, int debug_level, const char *fmt, ...)
 {
+    (void)channel;
     va_list args;
-    int ret = 0;
 
     va_start(args, fmt);
-    if(SE_TRACE_NOTICE == debug_level)
-        ret = vfprintf(stdout, fmt, args);
+    if (SE_TRACE_NOTICE == debug_level)
+        vfprintf(stdout, fmt, args);
     else
-        ret = vfprintf(stderr, fmt, args);
+        vfprintf(stderr, fmt, args);
     va_end(args);
 
-    return ret;
+    return;
+}
+
+void se_trace_internal(int debug_level, const char *fmt, ...)
+{
+    va_list args;
+
+    va_start(args, fmt);
+    if (sgx_trace_logger_callback && debug_level)
+    {
+        char message[2500]; // to make sure the full URL can be logged.
+        vsnprintf(message, sizeof(message), fmt, args);
+        va_end(args);
+
+        // ensure buf is always null-terminated
+        message[sizeof(message) - 1] = 0;
+
+        sgx_trace_logger_callback(debug_level - 1 , message);
+        return;
+    }
+    
+    if (SE_TRACE_NOTICE == debug_level)
+        vfprintf(stdout, fmt, args);
+    else
+        vfprintf(stderr, fmt, args);
+    va_end(args);
+
+    return;
 }

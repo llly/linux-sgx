@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -38,7 +38,10 @@
 void* se_virtual_alloc(void* address, size_t size, uint32_t type)
 {
     UNUSED(type);
-    void* pRet = mmap(address, size, PROT_READ | PROT_WRITE, MAP_PRIVATE |  MAP_ANONYMOUS, -1, 0);
+    int mmap_flag = MAP_PRIVATE |  MAP_ANONYMOUS;
+    if(address != NULL)
+        mmap_flag |= MAP_FIXED;
+    void* pRet = mmap(address, size, PROT_READ | PROT_WRITE, mmap_flag, -1, 0);
     if(MAP_FAILED == pRet)
         return NULL;
     return pRet;

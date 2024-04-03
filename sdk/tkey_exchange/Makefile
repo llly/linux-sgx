@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -32,7 +32,6 @@
 TOP_DIR  = ../..
 include $(TOP_DIR)/buildenv.mk
 
-CFLAGS   += -Werror
 CXXFLAGS += -Werror
 
 INCLUDE += -I$(COMMON_DIR)/inc/tlibc    \
@@ -44,10 +43,7 @@ INCLUDE += -I$(LINUX_PSW_DIR)/ae/inc    \
            -I$(LINUX_PSW_DIR)/ae/common \
            -I$(LINUX_PSW_DIR)/ae/
 
-INCLUDE += -I$(SGX_IPP_INC)     \
-           -I$(LINUX_EXTERNAL_DIR)/epid
-
-INCLUDE += -I$(LINUX_SDK_DIR)/tlibstdcxx/stlport
+INCLUDE += -I$(SGX_IPP_INC)
 
 vpath %.cpp $(COMMON_DIR)/src:$(LINUX_PSW_DIR)/ae/common
 vpath %.edl $(COMMON_DIR)/inc

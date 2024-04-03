@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -48,13 +48,11 @@
 #include "ErrorSupport.h"
 
 #define ENCLAVE_NAME "libenclave.signed.so"
-#define TOKEN_NAME "Enclave.token"
 
 #define THREAD_NUM 3
 
 // Global data
 sgx_enclave_id_t global_eid = 0;
-sgx_launch_token_t token = {0};
 rwlock_t lock_eid;
 struct sealed_buf_t sealed_buf;
 
@@ -67,45 +65,32 @@ void print(const char *str)
 }
 
 // load_and_initialize_enclave():
-//		To load and initialize the enclave     
-sgx_status_t load_and_initialize_enclave(sgx_enclave_id_t *eid, struct sealed_buf_t *sealed_buf)
+//		To load and initialize the enclave
+sgx_status_t load_and_initialize_enclave(sgx_enclave_id_t *eid, struct sealed_buf_t *buf)
 {
     sgx_status_t ret = SGX_SUCCESS;
     int retval = 0;
-    int updated = 0;
 
     for( ; ; )
     {
         // Step 1: check whether the loading and initialization operations are caused by power transition.
-        //		If the loading and initialization operations are caused by power transition, we need to call sgx_destory_enclave() first.
+        //		If the loading and initialization operations are caused by power transition, we need to call sgx_destroy_enclave() first.
         if(*eid != 0)
         {
             sgx_destroy_enclave(*eid);
         }
-	
+
         // Step 2: load the enclave
         // Debug: set the 2nd parameter to 1 which indicates the enclave are launched in debug mode
-        ret = sgx_create_enclave(ENCLAVE_NAME, SGX_DEBUG_FLAG, &token, &updated, eid, NULL);
+        ret = sgx_create_enclave(ENCLAVE_NAME, SGX_DEBUG_FLAG, NULL, NULL, eid, NULL);
         if(ret != SGX_SUCCESS)
             return ret;
 
-        // Save the launch token if updated
-        if(updated == 1)
-        {
-            ofstream ofs(TOKEN_NAME, std::ios::binary|std::ios::out);
-            if(!ofs.good())
-            {
-                cout<< "Warning: Failed to save the launch token to \"" <<TOKEN_NAME <<"\""<<endl;
-            }
-            else
-                ofs << token;
-        }
-
         // Step 3: enter the enclave to initialize the enclave
         //      If power transition occurs when the process is inside the enclave, SGX_ERROR_ENCLAVE_LOST will be returned after the system resumes.
-        //      Then we can load and intialize the enclave again or just return this error code and exit to handle the power transition.
-        //      In this sample, we choose to load and intialize the enclave again.
-        ret = initialize_enclave(*eid, &retval, sealed_buf);
+        //      Then we can load and initialize the enclave again or just return this error code and exit to handle the power transition.
+        //      In this sample, we choose to load and initialize the enclave again.
+        ret = initialize_enclave(*eid, &retval, buf);
         if(ret == SGX_ERROR_ENCLAVE_LOST)
         {
             cout<<"Power transition occured in initialize_enclave()" <<endl;
@@ -113,7 +98,7 @@ sgx_status_t load_and_initialize_enclave(sgx_enclave_id_t *eid, struct sealed_bu
         }
         else
         {
-            // No power transilation occurs.
+            // No power transition occurs.
             // If the initialization operation returns failure, change the return value.
             if(ret == SGX_SUCCESS && retval != 0)
             {
@@ -138,8 +123,8 @@ bool increase_and_seal_data_in_enclave()
     {
         for( ; ; )
         {
-            // If power transition occurs, all the data inside the enclave will be lost when the system resumes. 
-            // Therefore, if there are some secret data which need to be backed up for recover, 
+            // If power transition occurs, all the data inside the enclave will be lost when the system resumes.
+            // Therefore, if there are some secret data which need to be backed up for recover,
             // users can choose to seal the secret data inside the enclave and back up the sealed data.
 
             // Enter the enclave to increase the secret data and back up the sealed data
@@ -172,7 +157,7 @@ bool increase_and_seal_data_in_enclave()
                 }
                 else
                 {
-                    // The enclave has been reloaded by another thread. 
+                    // The enclave has been reloaded by another thread.
                     // Update the current EID and do increase_and_seal_data() again.
                     current_eid = global_eid;
                 }
@@ -210,22 +195,6 @@ bool set_global_data()
 {
     // Initialize the read/write lock.
     init_rwlock(&lock_eid);
-
-    // Get the saved launch token.
-    // If error occures, zero the token.
-    ifstream ifs(TOKEN_NAME, std::ios::binary | std::ios::in);
-    if(!ifs.good())
-    {
-        memset(token, 0, sizeof(sgx_launch_token_t));
-    }
-    else
-    {
-        ifs.read(reinterpret_cast<char *>(&token), sizeof(sgx_launch_token_t));
-        if(ifs.fail())
-        {
-            memset(&token, 0, sizeof(sgx_launch_token_t));
-        }
-    }
 
     // Allocate memory to save the sealed data.
     uint32_t sealed_len = sizeof(sgx_sealed_data_t) + sizeof(uint32_t);
@@ -316,4 +285,3 @@ int main(int argc, char* argv[])
     getchar();
     return 0;
 }
-

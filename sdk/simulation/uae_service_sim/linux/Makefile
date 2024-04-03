@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -32,32 +32,38 @@
 TOP_DIR  = ../../../..
 include $(TOP_DIR)/buildenv.mk
 
+LAUNCH_VERSION:= $(shell awk '$$2 ~ /LAUNCH_VERSION/ { print substr($$3, 2, length($$3) - 2); }' $(COMMON_DIR)/inc/internal/se_version.h)
+PLATFORM_VERSION:= $(shell awk '$$2 ~ /PLATFORM_VERSION/ { print substr($$3, 2, length($$3) - 2); }' $(COMMON_DIR)/inc/internal/se_version.h)
+EPID_VERSION:= $(shell awk '$$2 ~ /EPID_VERSION/ { print substr($$3, 2, length($$3) - 2); }' $(COMMON_DIR)/inc/internal/se_version.h)
+QUOTE_EX_VERSION:= $(shell awk '$$2 ~ /QUOTE_EX_VERSION/ { print substr($$3, 2, length($$3) - 2); }' $(COMMON_DIR)/inc/internal/se_version.h)
+
+PREBUILT_OPENSSL_DIR := $(LINUX_EXTERNAL_DIR)/dcap_source/prebuilt/openssl
+CRYPTO_LIB := -L$(PREBUILT_OPENSSL_DIR)/lib/linux64 -lcrypto
+
 INCLUDES := -I..                                            \
             -I$(COMMON_DIR)/inc                             \
             -I$(COMMON_DIR)/inc/internal                    \
             -I$(LINUX_SDK_DIR)/tseal                        \
             -I$(LINUX_SDK_DIR)/simulation/tinst             \
             -I$(LINUX_SDK_DIR)/simulation/urtssim           \
-            -I$(SGX_IPP_INC)                                \
-            -I$(LINUX_EXTERNAL_DIR)/epid                    \
+            -I$(LINUX_EXTERNAL_DIR)/epid-sdk                \
             -I$(LINUX_EXTERNAL_DIR)/rdrand/                 \
-            -I$(LINUX_PSW_DIR)/ae/inc     \
-            -I$(LINUX_PSW_DIR)/ae/inc/internal \
-            -I$(LINUX_PSW_DIR)/ae/common  
+            -I$(LINUX_PSW_DIR)/ae/inc                       \
+            -I$(LINUX_PSW_DIR)/ae/inc/internal              \
+            -I$(LINUX_PSW_DIR)/ae/common                    \
+            -I$(PREBUILT_OPENSSL_DIR)/inc
 
-CXXFLAGS += -Wall -fPIC $(INCLUDES) -Werror -g
-CFLAGS := $(filter-out -fPIC -Werror, $(CFLAGS)) -Wall $(INCLUDES)
 
-VERSION_SCRIPT = $(shell pwd)/uae_service_sim.linux.version
-LD_OPT_WITHVER = -Wl,--version-script=$(VERSION_SCRIPT)
+CXXFLAGS += -Wall -fPIC $(INCLUDES) -Werror -g  $(CET_FLAGS)
+CFLAGS := $(filter-out -fPIC -Werror, $(CFLAGS)) -Wall $(INCLUDES) $(CET_FLAGS)
+
 
 RDRAND_LIBDIR := $(LINUX_EXTERNAL_DIR)/rdrand/src
 RDRAND_MAKEFILE := $(RDRAND_LIBDIR)/Makefile
 
-EXTERNAL_LIB += -L$(IPP_LIBS_DIR) $(LD_IPP)
 EXTERNAL_LIB += -L$(RDRAND_LIBDIR) -lrdrand
 EXTERNAL_LIB += -L$(RDRAND_LIBDIR) -lrt
-EXTERNAL_LIB += -ldl
+EXTERNAL_LIB += -ldl $(CRYPTO_LIB)
 
 vpath %.cpp $(LINUX_PSW_DIR)/ae/common \
             $(LINUX_SDK_DIR)/simulation/urtssim \
@@ -65,41 +71,36 @@ vpath %.cpp $(LINUX_PSW_DIR)/ae/common \
 
 vpath %.c   $(COMMON_DIR)/src
 
-CPP_SRC := $(wildcard *.cpp ../*.cpp) se_sig_rl.cpp cpusvn_util.cpp sgx_read_rand.cpp
+CPP_SRC := $(wildcard *.cpp ../*.cpp) se_sig_rl.cpp cpusvn_util.cpp sgx_read_rand.cpp 
+CPP_SRC += crypto_evp_digest.cpp crypto_cmac_128.cpp
 C_SRC   := se_trace.c se_thread.c
 
 OBJ := $(sort $(CPP_SRC:.cpp=.o)) \
        $(C_SRC:.c=.o)
 
-DLLNAME = libsgx_uae_service_sim.so
-DLLNAME_DEBUG = libsgx_uae_service_sim.so.debug
-LIBUAE_SERVICE_DEPLOY := libsgx_uae_service_deploy.so
+LIBNAME  = libsgx_epid_sim.so libsgx_launch_sim.so libsgx_quote_ex_sim.so libsgx_uae_service_sim.so
+ifndef DEBUG
+LIBNAME_DEBUG  =  $(LIBNAME:.so=.so.debug)
+endif
+LIBUAE_SERVICE_DEPLOY := $(LIBNAME:_sim.so=_deploy.so)
 
 .PHONY: all
-all: $(DLLNAME) $(DLLNAME_DEBUG) $(LIBUAE_SERVICE_DEPLOY) | $(BUILD_DIR)
-	$(CP) $(DLLNAME) $|
-	$(CP) $(LIBUAE_SERVICE_DEPLOY) $|
+all: $(LIBNAME) $(LIBNAME_DEBUG) $(LIBUAE_SERVICE_DEPLOY) $(LEGACY_LIBNAME) $(LEGACY_LIBNAME_DEBUG) $(LEGACY_LIBUAE_SERVICE_DEPLOY) | $(BUILD_DIR)
+	@$(foreach lib,$(LIBNAME),$(CP) $(lib) $|;)
+	@$(foreach lib,$(LIBUAE_SERVICE_DEPLOY),$(CP) $(lib) $|;)
 ifndef DEBUG
-	$(CP) $(DLLNAME_DEBUG) $|
+	@$(foreach lib,$(LIBNAME_DEBUG),$(CP) $(lib) $|;)
 endif
 
-ifneq ($(USE_OPT_LIBS), 0)
-$(DLLNAME): $(OBJ) -lrdrand
-	$(CXX) $(CXXFLAGS) $(OBJ) -shared $(EXTERNAL_LIB) -o $@ $(LD_OPT_WITHVER)
-else
--lcrypto_px:
-	$(MAKE) -C $(IPP_LIBS_DIR)
-
-$(DLLNAME): $(OBJ) -lrdrand -lcrypto_px
-	$(CXX) $(CXXFLAGS) $(OBJ) -shared $(EXTERNAL_LIB) -o $@ $(LD_OPT_WITHVER)
-endif
-
-$(DLLNAME_DEBUG): $(DLLNAME)
+libsgx_%_sim.so: $(OBJ) -lrdrand
+	$(CXX) $(CXXFLAGS) $^ -shared $(LDUFLAGS) -Wl,--version-script=$(@:_sim.so=.lds) -Wl,--gc-sections $(EXTERNAL_LIB) -o $@
+%.so.debug: %.so
 ifndef DEBUG
-	$(CP) $(DLLNAME) $(DLLNAME).orig
-	$(OBJCOPY) --only-keep-debug $(DLLNAME) $(DLLNAME_DEBUG)
-	$(STRIP) -g $(DLLNAME)
-	$(OBJCOPY) --add-gnu-debuglink=$(DLLNAME_DEBUG) $(DLLNAME)
+	((test -f $@) ||( \
+	$(CP) $< $<.orig &&\
+	$(OBJCOPY) --only-keep-debug $< $@ &&\
+	$(STRIP) -g $< &&\
+	$(OBJCOPY) --add-gnu-debuglink=$@ $< ))
 endif
 
 %.o: %.c
@@ -119,8 +120,11 @@ else
 	@cd $(RDRAND_LIBDIR);./configure CFLAGS=-fPIC
 endif
 
-$(LIBUAE_SERVICE_DEPLOY): ../uae_service_deploy.c
-	$(CC) -fPIC -shared -Wl,-soname=libsgx_uae_service.so $< -o $@
+libsgx_%_deploy.so: ../libsgx_%_deploy.c
+	$(CC) -I$(COMMON_DIR)/inc $(CET_FLAGS) -fPIC -shared -Wl,-soname=$(@:_deploy.so=.so.$(call SPLIT_VERSION,$($(shell echo $(@:libsgx_%_deploy.so=%_version)|tr a-z A-Z)),1)) $< -o $@
+
+libsgx_uae_service_deploy.so: $(wildcard ../*_deploy.c)
+	$(CC) -I$(COMMON_DIR)/inc $(CET_FLAGS) -fPIC -shared -Wl,-soname=$(@:_deploy.so=.so) $^ -o $@
 
 $(BUILD_DIR):
 	@$(MKDIR) $@
@@ -128,13 +132,10 @@ $(BUILD_DIR):
 .PHONY: clean
 clean:
 	@$(RM) *.o
-	@$(RM) ../*.o $(DLLNAME).orig
-	@$(RM) $(DLLNAME) $(BUILD_DIR)/$(DLLNAME)
-	@$(RM) $(DLLNAME_DEBUG) $(BUILD_DIR)/$(DLLNAME_DEBUG)
-	@$(RM) $(LIBUAE_SERVICE_DEPLOY) $(BUILD_DIR)/$(LIBUAE_SERVICE_DEPLOY)
-ifeq ($(USE_OPT_LIBS), 0)
-	@$(MAKE) -C $(IPP_LIBS_DIR) clean
-endif
+	@$(RM) ../*.o *.orig
+	@$(RM) $(LIBNAME) $(addprefix $(BUILD_DIR)/,$(LIBNAME))
+	@$(RM) $(LIBNAME_DEBUG) $(addprefix $(BUILD_DIR)/,$(LIBNAME_DEBUG))
+	@$(RM) $(LIBUAE_SERVICE_DEPLOY)  $(addprefix $(BUILD_DIR)/,$(LIBUAE_SERVICE_DEPLOY))
 ifeq ($(RDRAND_MAKEFILE), $(wildcard $(RDRAND_MAKEFILE)))
 	@$(MAKE) distclean -C $(RDRAND_LIBDIR)
 endif

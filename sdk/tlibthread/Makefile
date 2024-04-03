@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -40,7 +40,9 @@ CPPFLAGS := -I$(COMMON_DIR)/inc/internal \
             -I$(LINUX_PSW_DIR)
 
 OBJ := sethread_mutex.o \
-       sethread_cond.o  \
+       sethread_spinlock.o \
+       sethread_rwlock.o \
+       sethread_cond.o \
        sethread_utils.o
 
 LIBTLIBTHREAD := libtlibthread.a

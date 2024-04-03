@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -40,9 +40,33 @@
 #define CPUID_FEATURE_FLAGS 7
 #define SE_FEATURE_SHIFT 2
 #define SE1_SHIFT 0
+// ECX[9]
+#define PKRU_SHIFT 9
 
+#define AMX_TILECFG_SHIFT 17
+#define AMX_TILEDATA_SHIFT 18
+
+#define EDECCSSA_SHIFT 11
+
+// CPUID function 1 
+// ECX[26] enums general support for XSAVE
+// ECX[27] enums XSAVE is enabled or not
 #define XSAVE_SHIFT 26
 #define OSXSAVE_SHIFT 27
+
+// CPUID function 0DH, sub-function 1
+// EAX[1] enums support for compaction extensions to XSAVE
+#define XSAVEC_SHIFT 1
+
+// CPUID function 07H, sub-function 0
+// ECX[3] enums whether protection key feature is supported for user mode pages.
+// ECX[4] enums whether the OS supports use of the PKRU or not
+#define PKU_SHIFT 3
+#define PKE_SHIFT 4
+
+bool is_se_supported();
+
+bool is_edeccssa_supported();
 
 bool try_read_xcr0(uint64_t *value);
 //bool is_se_debug_supported();

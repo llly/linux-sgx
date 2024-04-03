@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,11 +35,15 @@
 #include <stdint.h>
 #include "sgx_quote.h"
 #include "sgx_ecp_types.h"
-#include "sgx_tae_service.h"
 
 #ifdef  __cplusplus
 extern "C" {
 #endif
+
+typedef struct _ps_sec_prop_desc
+{
+    uint8_t  sgx_ps_sec_prop_desc[256];
+} sgx_ps_sec_prop_desc_t;
 
 typedef uint32_t sgx_ra_context_t;
 
@@ -49,7 +53,6 @@ typedef enum _ra_key_type_t
 {
     SGX_RA_KEY_SK = 1,
     SGX_RA_KEY_MK,
-    SGX_RA_KEY_VK,
 } sgx_ra_key_type_t;
 
 typedef struct _ra_msg1_t
@@ -75,7 +78,7 @@ typedef struct _ra_msg3_t
 {
     sgx_mac_t                mac;         /* mac_smk(g_a||ps_sec_prop||quote) */
     sgx_ec256_public_t       g_a;         /* the Endian-ness of Ga is Little-Endian */
-    sgx_ps_sec_prop_desc_t   ps_sec_prop;
+    sgx_ps_sec_prop_desc_t   ps_sec_prop; /* reserved Must be 0 */
     uint8_t                  quote[];
 } sgx_ra_msg3_t;
 

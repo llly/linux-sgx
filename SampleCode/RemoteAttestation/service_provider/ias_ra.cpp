@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -42,7 +42,7 @@
 #include "ias_ra.h"
 
 //This whole file is used as simulation of the interfaces to be
-// delivered an attestation server. 
+// delivered an attestation server.
 
 
 #define UNUSED(expr) do { (void)(expr); } while (0)
@@ -77,7 +77,7 @@
 // key and the public key in SDK untrusted KElibrary should be a temporary key
 // pair. For production parts an attestation server will sign the platform_info_blob with the
 // production private key and the SDK untrusted KE library will have the public
-// key for verifcation.
+// key for verification.
 
 static const sample_ec256_private_t g_rk_priv_key =
 {{
@@ -104,7 +104,7 @@ static sample_spid_t g_sim_spid = {"Service X"};
 // @return int
 
 int ias_verify_attestation_evidence(
-    sample_quote_t *p_isv_quote,
+    const sample_quote_t *p_isv_quote,
     uint8_t* pse_manifest,
     ias_att_report_t* p_attestation_verification_report)
 {
@@ -147,7 +147,7 @@ int ias_verify_attestation_evidence(
            0, GID_SIZE);
 
     // @TODO: Product signing algorithm still TBD.  May be RSA2048 signing.
-    // Generate the Service providers ECCDH key pair.
+    // Generate the Service providers ECDH key pair.
     do {
         ret = sample_ecc256_open_context(&ecc_state);
         if (SAMPLE_SUCCESS != ret) {
@@ -187,7 +187,7 @@ int ias_verify_attestation_evidence(
 }
 
 
-// Simulates retrieving the SIGRL for upon the SP request. 
+// Simulates retrieving the SIGRL for upon the SP request.
 //
 // @param gid Group ID for the EPID key.
 // @param p_sig_rl_size Pointer to the output value of the full
@@ -243,12 +243,11 @@ int ias_enroll(
     UNUSED(p_authentication_token);
 
     if (NULL != p_spid) {
-        memcpy_s(p_spid, sizeof(sample_spid_t), &g_sim_spid,
-                 sizeof(sample_spid_t));
+        if(memcpy_s(p_spid, sizeof(sample_spid_t), &g_sim_spid, sizeof(sample_spid_t))) {
+            return(1);
+        }
     } else {
         return(1);
     }
     return(0);
 }
-
-

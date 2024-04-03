@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,10 +35,9 @@
 #define _SGX_ECP_TYPES_H_
 
 #include <stdint.h>
+#include "sgx_tcrypto.h"
 
 #pragma pack(push, 1)
-
-#include "sgx_tcrypto.h"
 
 #ifndef SGX_FEBITSIZE
 #define SGX_FEBITSIZE                   256

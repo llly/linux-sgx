@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,8 +36,9 @@
 #include "sgx_edger8r.h"
 #include "rts.h"
 #include "util.h"
-#include "xsave.h"
 #include "trts_internal.h"
+#include "sgx_trts.h"
+#include "sgx_trts_aex.h"
 
 extern "C" sgx_status_t asm_oret(uintptr_t sp, void *ms);
 extern "C" sgx_status_t __morestack(const unsigned int index, void *ms);
@@ -53,33 +54,20 @@ extern "C" sgx_status_t __morestack(const unsigned int index, void *ms);
 //
 sgx_status_t sgx_ocall(const unsigned int index, void *ms)
 {
-    // sgx_ocall is not allowed during exception handling
-    thread_data_t *thread_data = get_thread_data();
-    
-    // we have exceptions being handled
-    if(thread_data->exception_flag != 0) {
-        return SGX_ERROR_OCALL_NOT_ALLOWED;
-    }
     // the OCALL index should be within the ocall table range
-    if(static_cast<size_t>(index) >= g_dyn_entry_table.nr_ocall)
+    // -2, -3 and -4 -5 should be allowed to test SDK 2.0 features
+    if((index != 0) && !is_builtin_ocall((int)index) &&
+            static_cast<size_t>(index) >= g_dyn_entry_table.nr_ocall)
     {
         return SGX_ERROR_INVALID_FUNCTION;
     }
-    // save and clean extended feature registers
-    uint8_t buffer[FXSAVE_SIZE] = {0};
-    save_and_clean_xfeature_regs(buffer);
 
     // do sgx_ocall
     sgx_status_t status = do_ocall(index, ms);
 
-    // restore extended feature registers
-    restore_xfeature_regs(buffer);
-
-    // clear buffer to avoid secret leaking
-    memset_s(buffer, FXSAVE_SIZE, 0, FXSAVE_SIZE);
-
     return status;
 }
+
 
 extern "C"
 uintptr_t update_ocall_lastsp(ocall_context_t* context)
@@ -110,6 +98,15 @@ uintptr_t update_ocall_lastsp(ocall_context_t* context)
 sgx_status_t do_oret(void *ms)
 {
     thread_data_t *thread_data = get_thread_data();
+#ifndef SE_SIM
+    // If aexnotify is enabled but we disable it temporarily before EEXIT
+    // we need to enable it again after stack switch in oret
+    if(thread_data->aex_notify_flag == 1)
+    {
+        thread_data->aex_notify_flag = 0;
+        sgx_set_ssa_aexnotify(1);
+    }
+#endif
     uintptr_t last_sp = thread_data->last_sp;
     ocall_context_t *context = reinterpret_cast<ocall_context_t*>(thread_data->last_sp);
     if(0 == last_sp || last_sp <= (uintptr_t)&context)

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,6 +35,7 @@
 
 #ifndef LINUX_REGS_H__
 #define LINUX_REGS_H__
+#include "sgx_cet.h"
 
 #if defined(__i386) || defined(__i386__)
 #  define LINUX32       1
@@ -85,6 +86,12 @@
 #define SE_EGETKEY    1
 #define SE_EENTER     2
 #define SE_EEXIT      4
+#define SE_EACCEPT    5
+#define SE_EMODPE     6
+#define SE_EACCEPTCOPY   7
+#define SE_EVERIFYREPORT2 8
+#define SE_EDECCSSA   9
+
 
 #define SE_ECREATE    0
 #define SE_EADD       1
@@ -137,6 +144,7 @@
     .globl \name
     .type \name, @function
 \name:
+    _CET_ENDBR
 .endm
 
 /* declare a function with visibility='hidden' */
@@ -145,6 +153,7 @@
     .hidden \name
     .type \name, @function
 \name:
+    _CET_ENDBR
 .endm
 
 .macro NAKED_PROLOG

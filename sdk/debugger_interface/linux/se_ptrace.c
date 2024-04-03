@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,10 +36,8 @@
 #include "se_trace.h"
 #include "se_memory.h"
 #include <unistd.h>
-#include <sys/ptrace.h>
 #include <dlfcn.h>
 #include <stdarg.h>
-#include <stdio.h>
 #include <stdio.h>
 #include <sys/user.h>
 #include <sys/ptrace.h>
@@ -149,7 +147,7 @@ static int get_exec_class(pid_t pid)
 
 static inline uint32_t get_ssa_frame_size(pid_t pid, thread_data_t* td)
 {
-    uint32_t ssa_frame_size = td->ssa_frame_size;
+    uint32_t ssa_frame_size = ROUND_TO_PAGE(td->xsave_size) >> SE_PAGE_SHIFT;
 #ifdef __x86_64__
     //on x64, we may debug elf32 enclave, we need refer to different offset in td field.
     if(ELFCLASS32 == get_exec_class(pid))
@@ -161,8 +159,11 @@ static inline uint32_t get_ssa_frame_size(pid_t pid, thread_data_t* td)
 #endif
 
     //When debug trts, ssa_frame_size in TD is not initialized, so the value will be 0.
-    //It is a limitation to debug trts. As work around, the default size is 1 page, so
-    //we can debug enclave from the start of enclave_entry.
+    //It is a limitation to debug trts. As a workaround, set the default page to 1, so
+    //we can debug enclave from the start of enclave_entry. It works on most platforms
+    //except the enclave supports AMX. 
+    //AMX makes the ssa_frame_size more than 1 page. If AMX is enabled, the debugger will 
+    //only be workable after TD is initialized.
     if(0 == ssa_frame_size)
         ssa_frame_size = 1;
 
@@ -389,12 +390,7 @@ static long int get_regs(pid_t pid, void* addr, void* data)
     if(is_eresume(pid, regs))
     {
         //If it is ERESUME instruction, set the real register value
-        if(-1 == get_enclave_gregs(pid, regs, regs->REG(bx)))
-            return -1;
-        else
-        {
-            return ret;
-        }
+        get_enclave_gregs(pid, regs, regs->REG(bx));
     }
 
     return ret;

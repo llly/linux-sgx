@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,21 +34,21 @@
 
 /* The following macros are for GCC only */
 
-# define SGXAPI
+#define SGXAPI
 
-# ifdef linux
-#  undef linux
-# endif
-# define SGX_CXX_NATIVE_HEADER(header)   <stdc++/linux/header>
+#ifdef linux
+  #undef linux
+#endif
+#define SGX_CXX_NATIVE_HEADER(header)   <stdc++/linux/header>
 
-# define SGX_CDECL
-# define SGX_STDCALL
-# define SGX_FASTCALL
+#define SGX_CDECL
+#define SGX_STDCALL
+#define SGX_FASTCALL
 
-# define SGX_DLLIMPORT
-# define SGX_UBRIDGE(attr, fname, args...) attr fname args
+#define SGX_DLLIMPORT
+#define SGX_UBRIDGE(attr, fname, args...) attr fname args
 
-# define SGX_DEPRECATED __attribute__((deprecated))
+#define SGX_DEPRECATED __attribute__((deprecated))
 
 
 #define SGX_NOCONVENTION /* Empty.  No calling convention specified. */

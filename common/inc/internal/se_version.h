@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,5 +28,28 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  */
-#define STRFILEVER      "1.9.100.39124"
+#ifndef _SE_VERSION_H_
+#define _SE_VERSION_H_
 
+#define STRFILEVER    "2.23.100.2"
+#define SGX_MAJOR_VERSION       2
+#define SGX_MINOR_VERSION       23
+#define SGX_REVISION_VERSION    100
+#define MAKE_VERSION_UINT(major,minor,rev)  (((uint64_t)major)<<32 | ((uint64_t)minor) << 16 | rev)
+#define VERSION_UINT        MAKE_VERSION_UINT(SGX_MAJOR_VERSION, SGX_MINOR_VERSION, SGX_REVISION_VERSION)
+
+#define COPYRIGHT      "Copyright (C) 2023 Intel Corporation"
+
+#define UAE_SERVICE_VERSION       "2.3.222.2"
+#define URTS_VERSION              "2.0.106.2"
+#define ENCLAVE_COMMON_VERSION    "1.2.106.2"
+#define LAUNCH_VERSION            "1.0.124.2"
+#define EPID_VERSION              "1.0.124.2"
+#define QUOTE_EX_VERSION          "1.1.124.2"
+
+#define PCE_VERSION               "1.22.100.1"
+#define LE_VERSION                "1.22.100.1"
+#define QE_VERSION                "1.22.100.1"
+#define PVE_VERSION               "1.22.100.1"
+
+#endif

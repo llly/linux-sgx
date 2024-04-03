@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,7 +29,6 @@
  *
  */
 
-
 /*
  * Description:
  *     The file provides `enclave_entry' function to switch code between
@@ -40,7 +39,8 @@
 
 #include "trts_pic.h"
 
-    .text
+    /* .text */
+    .section .nipx,"ax",@progbits
 
 DECLARE_LOCAL_FUNC get_enclave_base
     lea_pic __ImageBase, %xax
@@ -67,7 +67,7 @@ DECLARE_LOCAL_FUNC lock_enclave
     lock cmpxchgl %ecx, (%xdx)                  /*   g_global_data.enclave_state == ENCLAVE_INIT_IN_PROGRESS */
     ret                                         /* xax: the initial value of enclave state */
 
-/* 
+/*
  * ---------------------------------------------------------------------
  * Function: thread_data_t* get_thread_data(void);
  *
@@ -75,21 +75,21 @@ DECLARE_LOCAL_FUNC lock_enclave
  * ---------------------------------------------------------------------
  */
 DECLARE_LOCAL_FUNC get_thread_data
-    READ_TD_DATA self_addr 
+    READ_TD_DATA self_addr
     ret
 
-/* 
+/*
  * ---------------------------------------------------------------------
  * Function: sys_word_t get_stack_guard(void);
  *
  *     Get the value of stack_guard
  * ---------------------------------------------------------------------
  */
-DECLARE_LOCAL_FUNC get_stack_guard 
-    READ_TD_DATA stack_guard 
+DECLARE_LOCAL_FUNC get_stack_guard
+    READ_TD_DATA stack_guard
     ret
-    
-/* 
+
+/*
  * ---------------------------------------------------------------------
  * Function: enclave_entry
  *      The entry point of the enclave.
@@ -102,7 +102,7 @@ DECLARE_LOCAL_FUNC get_stack_guard
  *      XSI - the pointer to the marshalling structure
  */
 DECLARE_GLOBAL_FUNC enclave_entry
-/* 
+/*
  * ----------------------------------------------------------------------
  * Dispatch code according to CSSA and the reason of EENTER
  *      eax >   0 - exception handler
@@ -110,13 +110,30 @@ DECLARE_GLOBAL_FUNC enclave_entry
  *      edi == -1 - do_init_enclave
  *      edi == -2 - oret
  * Registers
- *      No need to use any register during the dipatch
+ *      No need to use any register during the dispatch
  * ----------------------------------------------------------------------
  */
     .cfi_startproc
+
+    /* Clear unused general registers */
+    xor     %xdx, %xdx
+    add     %xdx, %xdx          /* OF = SF = AF = CF = 0; ZF = PF = 1 */
+    cld                         /* DF = 0 */
+#if defined(LINUX64)
+    xor     %r8, %r8
+    xor     %r9, %r9
+    xor     %r10, %r10
+    xor     %r11, %r11
+    xor     %r12, %r12
+    xor     %r13, %r13
+    xor     %r14, %r14
+    xor     %r15, %r15
+#endif
+
+    /* switch to trusted stack */
     cmp     $0, %xax
     jne     .Ldo_handler                /* handle exception state */
-    xor     %xdx, %xdx
+    /* xor     %xdx, %xdx                  xdx is cssa, make sure it is 0 */
     READ_TD_DATA last_sp
     cmp     $0, %xax
     jne .Lswitch_stack
@@ -132,6 +149,9 @@ DECLARE_GLOBAL_FUNC enclave_entry
     mov     %xsp, %xbp
     .cfi_def_cfa_register xbp
 
+    CLEAN_XFLAGS
+
+
     /* Save the registers */
     sub     $(6*SE_WORDSIZE), %xsp
     mov     %xax, -1*SE_WORDSIZE(%xbp)  /* xsp_u */
@@ -140,20 +160,67 @@ DECLARE_GLOBAL_FUNC enclave_entry
     mov     %xsi, -5*SE_WORDSIZE(%xbp)  /* XSI */
     mov     %xdi, -6*SE_WORDSIZE(%xbp)  /* XDI */
 
+    /* clean extended feature registers */
+    sub     $(4*SE_WORDSIZE), %xsp
+
+    lea_pic SYNTHETIC_STATE, %xdi
+#ifdef LINUX32
+    mov     %xdi, (%xsp)
+#endif
+    call    restore_xregs
+    lfence
+    add     $(4*SE_WORDSIZE), %xsp
+
+    /* switch to C code */
 #ifdef LINUX64
-    mov     %rdx, %rcx
-    mov     %rbx, %rdx
+    mov     -6*SE_WORDSIZE(%xbp), %xdi  /* index */
+    mov     -5*SE_WORDSIZE(%xbp), %xsi  /* ms */
+    mov     -4*SE_WORDSIZE(%xbp), %xdx  /* TCS */
+    mov     -3*SE_WORDSIZE(%xbp), %xcx  /* cssa */
 #endif
     call    enter_enclave
+    mov     %xax, %xbx
 
 .Lexit_enclave:
+/* clean extended feature registers */
+    lea_pic SYNTHETIC_STATE, %xdi
+#ifdef LINUX32
+    mov     %xdi, (%xsp)
+#endif
+    call    restore_xregs
+    lfence
+
+#ifndef SE_SIM
+    mov     -3*SE_WORDSIZE(%xbp), %xax  /* cssa */
+    cmp      $0, %xax
+    jne     .Lrestore_untrust_stack
+
+    READ_TD_DATA self_addr          /* xax: td */
+    cmp     $0, %xax                /* check if td is initialized */
+    je      .Lrestore_untrust_stack
+    mov     first_ssa_gpr(%xax), %xdx
+    movb    aex_notify(%xdx), %cl
+    cmpb    $0, %cl
+    je     .Lrestore_untrust_stack
+    /*
+     * clear aexnotify bit to disable aexnotify temporarily and
+     * set td.aex_notify_flag to indicate aexnotify is enabled
+     * before EEXIT
+     */
+    movb    $0, aex_notify(%xdx)
+    movl    $0x1, aex_notify_flag(%xax)
+#endif
+.Lrestore_untrust_stack:
+/* set xdi and xsi */
+    mov     $OCMD_ERET, %xdi
+    mov     %xbx, %xsi
+
+/* restore stack */
     mov     -1*SE_WORDSIZE(%xbp), %xdx  /* xdx: xsp_u  */
     mov     %xbp, %xsp
     pop     %xbp                        /* xbp_u */
     pop     %xbx                        /* ret_u */
     mov     %xdx, %xsp                  /* xsp_u */
-    mov     $OCMD_ERET, %xdi
-    mov     %xax, %xsi
 
 .Lclear_and_exit_enclave:
     /* Clear all GPRs, except xax, xbx, xdi and xsi */
@@ -172,6 +239,7 @@ DECLARE_GLOBAL_FUNC enclave_entry
 
     /* Set status flags to pre-defined values */
     add     %xdx, %xdx          /* OF = SF = AF = CF = 0; ZF = PF = 1 */
+    cld                         /* DF = 0 */
 
     /* EEXIT */
     mov     $SE_EEXIT, %xax     /* EEXIT leaf */
@@ -183,14 +251,14 @@ DECLARE_GLOBAL_FUNC enclave_entry
 .Ldo_handler:
     mov     %xax, %xdx          /* XDX: cssa */
     GET_STACK_BASE %xbx         /* XAX: static stack, set sp to stack base */
-    jmp     .Lswitch_stack   
- 
+    jmp     .Lswitch_stack
+
     /* Should not come here */
     ud2
-    
+
     .cfi_endproc
 
-/* 
+/*
  * -------------------------------------------------------------------------
  *  sgx_status_t do_ocall(unsigned int index, void *ms);
  *
@@ -207,9 +275,14 @@ DECLARE_GLOBAL_FUNC enclave_entry
  *    previous TD.last_sp -> |   frames        |
  *                            -----------------
  *                           |   ECALL frame   |
- *                           | do_ocall param 2| 21
- *                           | do_ocall param 1| 20
- *                           |do_ocall ret_addr| 19
+ *                           | do_ocall param 2| 3
+ *                           | do_ocall param 1| 2
+ *                           |do_ocall ret_addr| 1
+ *                           |     xbp         | 0 + xbp
+ *                           |     ....        |
+ *                           |   xsave buffer  |
+ *                           |     ....        |
+ *                           |  xsave pointer  | 19
  *                           |   ocall_depth   | 18
  *                           |   reserved      | 17
  *                           |   reserved      | 16
@@ -228,20 +301,37 @@ DECLARE_GLOBAL_FUNC enclave_entry
  *                           |    shadow       | 3
  *                           |    shadow       | 2
  *                           |    shadow       | 1
- *             TD.last_sp -> |    shadow       | 0
+ *             TD.last_sp -> |    shadow       | 0 + xsp
  *                            -----------------
  * -------------------------------------------------------------------------
  */
 DECLARE_LOCAL_FUNC do_ocall
 
-/* 
+/*
  * 8 for GPR, 1 for TD.last_sp, 1 for ocall_index
  * 1 for OCALL_FLAG, 4 for shadow space.
  * Stack Pointer is 16-byte aligned under x86_64.
  */
-    sub     $(19*SE_WORDSIZE), %xsp
+    push    %xbp
+    mov     %xsp, %xbp
 
-    /* save non-volatile registers, except xsp */
+/* save parameters in stack */
+#ifdef LINUX64
+    mov     %xdi, 2*SE_WORDSIZE(%xbp)
+    mov     %xsi, 3*SE_WORDSIZE(%xbp)
+#endif
+
+/* save and clean extended feature registers */
+    READ_TD_DATA xsave_size
+    sub     %xax, %xsp                 /* allocate buffer to save xregs */
+    mov     $0x3f, %xax
+    not     %xax
+    and     %xax, %xsp                 /* xsave requires 64 byte aligned */
+    mov     %xsp, %xcx                 # xsave pointer
+
+    sub     $(20*SE_WORDSIZE), %xsp    /* 20 slots for GPRs and other info */
+    mov     %xcx, SE_WORDSIZE*19(%xsp) /* addr for xsave */
+/* save non-volatile registers, except xsp */
     mov     %xbx, SE_WORDSIZE*14(%xsp)
     mov     %xsi, SE_WORDSIZE*13(%xsp)
     mov     %xdi, SE_WORDSIZE*12(%xsp)
@@ -254,17 +344,30 @@ DECLARE_LOCAL_FUNC do_ocall
     mov     %r15, SE_WORDSIZE* 7(%rsp)
 #endif
 
+/* save and clean extended feature registers */
+    mov     SE_WORDSIZE*19(%xsp), %xdi /* xsave pointer */
+    READ_TD_DATA xsave_size
+    mov     %xax, %xcx
+    shr     $2, %xcx                   /* xsave size in dword */
+    xor     %xax, %xax
+    cld
+    rep stos %eax, %es:(%xdi)
+
+    mov     SE_WORDSIZE*19(%xsp), %xdi # xsave pointer
+    mov     %xdi, (%xsp)
+    call    save_xregs
+    lea_pic SYNTHETIC_STATE, %xdi
+    mov     %xdi, (%xsp)
+    call    restore_xregs
+    lfence
+
     /* set xdi and xsi using the input parameters */
 #ifdef LINUX64
-    mov     %edi, %edi      /* it should clear the high 32bit word of RDI */
-    /*
-     * rdi - param 1 (index), rsi - param 2 (ms) 
-     * only use lower 32bit of rdi, rsi remains unchanged. 
-     */
-#endif
-#ifdef LINUX32
-    mov     SE_WORDSIZE*20(%esp), %edi
-    mov     SE_WORDSIZE*21(%esp), %esi
+    mov     SE_WORDSIZE*12(%xsp), %xdi
+    mov     SE_WORDSIZE*13(%xsp), %xsi
+#else
+    mov     SE_WORDSIZE*2(%ebp), %edi
+    mov     SE_WORDSIZE*3(%ebp), %esi
 #endif
 
     /* save ocall index to the stack */
@@ -278,7 +381,7 @@ DECLARE_LOCAL_FUNC do_ocall
      *     set TD.last_sp = xsp
      */
     READ_TD_DATA self_addr
-    mov     %xax, %xbx 
+    mov     %xax, %xbx
 
     /* call update_ocall_lastsp */
 #ifdef LINUX32
@@ -286,16 +389,29 @@ DECLARE_LOCAL_FUNC do_ocall
 #else
     mov     %xsp, %xdi
 #endif
-    
+
     call    update_ocall_lastsp         /* xax: td.last_sp */
 
 #ifdef LINUX64
     mov     SE_WORDSIZE*12(%xsp), %xdi   /* restore xdi */
     mov     SE_WORDSIZE*13(%xsp), %xsi   /* restore xdi */
 #endif
-
     /* restore outside stack context */
     mov     first_ssa_gpr(%xbx), %xdx
+#ifndef SE_SIM
+    movb    aex_notify(%xdx), %cl
+    cmpb    $0, %cl
+    je     .Lrestore_outside_stack
+
+    /*
+     * clear aexnotify to disable aexnotify temporarily and
+     * set td.aex_notify_flag to indicate aexnotify is enabled
+     * before EEXIT
+     */
+    movb    $0, aex_notify(%xdx)
+    movl    $0x1, aex_notify_flag(%xbx)
+#endif
+.Lrestore_outside_stack:
     mov     ssa_bp_u(%xdx), %xbp
     mov     ssa_sp_u(%xdx), %xsp
     /*
@@ -327,6 +443,7 @@ DECLARE_LOCAL_FUNC do_ocall
 
     /* Set status flags to pre-defined values */
     add     %xdx, %xdx          /* OF = SF = AF = CF = 0; ZF = PF = 1 */
+    cld                         /* DF = 0 */
 
     ENCLU
 
@@ -357,12 +474,32 @@ DECLARE_LOCAL_FUNC __morestack
     .cfi_endproc
 
 DECLARE_GLOBAL_FUNC asm_oret
-#ifdef LINUX32
-    mov     SE_WORDSIZE(%xsp), %xdi
-    mov     2*SE_WORDSIZE(%xsp), %xsi
+    mov     %xsp, %xbx
+#ifdef LINUX64
+    mov     %xdi, SE_WORDSIZE(%xsp)
+    mov     %xsi, 2*SE_WORDSIZE(%xsp)
 #endif
-    mov     %xdi, %xsp         /* restore thread_data.last_sp */
-    mov     %xsi, %xax         /* ocall return value */
+    mov     SE_WORDSIZE(%xbx), %xsp    /* restore thread_data.last_sp */
+
+/* restore extended feature registers */
+    mov     19*SE_WORDSIZE(%xsp), %xdi
+#ifdef LINUX32
+    mov     %xdi, (%xsp)
+#endif
+    call    restore_xregs
+    lfence
+
+/* memset_s */
+    xor     %xax, %xax
+    mov     11*SE_WORDSIZE(%xsp), %xcx
+    sub     %xdi, %xcx
+    sub     $SE_WORDSIZE, %xcx
+    shr     $2, %xcx
+    cld
+    rep stos %eax,%es:(%xdi)
+
+    mov     2*SE_WORDSIZE(%xbx), %xax  /* ocall return value */
+
 #ifdef LINUX64
     mov     7*SE_WORDSIZE(%xsp), %r15
     mov     8*SE_WORDSIZE(%xsp), %r14
@@ -375,13 +512,14 @@ DECLARE_GLOBAL_FUNC asm_oret
     mov    13*SE_WORDSIZE(%xsp), %xsi
     mov    14*SE_WORDSIZE(%xsp), %xbx
 
-    add    $(19*SE_WORDSIZE),  %xsp
+    mov     %xbp, %xsp
+    pop     %xbp
 
     ret
     /* should not come here */
     ud2
 
-/* 
+/*
  * ------------------------------------------------------------------------
  * extern "C" int do_egetkey(key_request_t *key_request, key_128bit_t *key)
  * return value:
@@ -404,26 +542,64 @@ DECLARE_LOCAL_FUNC do_egetkey
     xor  %xax, %xax
 .Legetkey_done:
     SE_EPILOG
-    ret
 
 
-/* 
+/*
  * -------------------------------------------------------------------------
- * extern "C" void do_ereport(sgx_target_info_t *target_info, sgx_report_data_t *report_data, sgx_report_t *report);
+ * extern "C" int do_ereport(sgx_target_info_t *target_info, sgx_report_data_t *report_data, sgx_report_t *report);
  * EREPORT: rbx - the address of TARGETINFO;
  *          rcx - the address of REPORTDATA;
  *          rdx - the address where REPORT is outputted
+ * return value:
+ *          zero: success
+ *          non-zero: failure
  * -------------------------------------------------------------------------
  */
+.global Lereport_inst
 DECLARE_LOCAL_FUNC do_ereport
     SE_PROLOG
     mov       $SE_EREPORT, %xax  /* EREPORT leaf */
+    clc
+Lereport_inst:
+    ENCLU
+    setc      %al
+    SE_EPILOG
+
+.global Leverifyreport2_inst
+DECLARE_LOCAL_FUNC do_everifyreport2
+    SE_PROLOG
+    mov       $SE_EVERIFYREPORT2, %xax  /* EVERIFYREPORT2 leaf */
+Leverifyreport2_inst:
+    ENCLU
+    jz   .Leverifyreport2_done  /* if EVERIFYREPORT2 error, ZF flag is set and error code is set to xax */
+    xor  %xax, %xax
+.Leverifyreport2_done:
+    SE_EPILOG
+
+DECLARE_GLOBAL_FUNC do_eaccept
+    SE_PROLOG
+    mov     $SE_EACCEPT, %eax
+    ENCLU
+    cmp  $SGX_SUCCESS, %eax
+    jnz	 abort
+    SE_EPILOG
+
+DECLARE_GLOBAL_FUNC do_eacceptcopy
+    SE_PROLOG
+    mov     $SE_EACCEPTCOPY, %eax
+    ENCLU
+    cmp  $SGX_SUCCESS, %eax
+    jnz  abort
+    SE_EPILOG
+
+DECLARE_GLOBAL_FUNC do_emodpe
+    SE_PROLOG
+    mov     $SE_EMODPE, %eax
     ENCLU
     SE_EPILOG
-    ret
-    
-#define _RDRAND_RETRY_TIMES 10	
-/* 
+
+#define _RDRAND_RETRY_TIMES 10
+/*
  * -------------------------------------
  * extern "C" uint32_t do_rdrand(uint32_t *rand);
  * return value:
@@ -460,7 +636,7 @@ DECLARE_LOCAL_FUNC abort
     movl    $ENCLAVE_CRASHED, (%xax)
     ud2
 
-/* 
+/*
  * -------------------------------------------------------------------------
  * extern "C" __attribute__((regparm(1))) void continue_execution(sgx_exception_info_t *info);
  * -------------------------------------------------------------------------
@@ -472,13 +648,14 @@ DECLARE_LOCAL_FUNC continue_execution
     mov     %xdi, %xcx
 #endif
     mov     SE_WORDSIZE*0(%xcx), %xax
-    push    %xax                       # push xax
+    push    %xax                       /* push xax */
     mov     SE_WORDSIZE*1(%xcx), %xax
-    push    %xax                       # push xcx
-    mov     SE_WORDSIZE*4(%xcx), %xax
-    sub     $(SE_WORDSIZE), %xax       # xax: xsp
+    push    %xax                       /* push xcx */
+    mov     SE_WORDSIZE*4(%xcx), %xax  /* xax: xsp */
+/* x86_64 requires a 128-bytes red zone. We need to allocate buffer to avoid touching the red zone. */
+    sub     $(SE_WORDSIZE + RED_ZONE_SIZE), %xax   /* allocate buffer to skip red zone and save xip */
 
-# restore registers except xax, xcx, xsp
+/* restore registers except xax, xcx, xsp */
     mov     SE_WORDSIZE*2(%xcx), %xdx
     mov     SE_WORDSIZE*3(%xcx), %xbx
     mov     SE_WORDSIZE*5(%xcx), %xbp
@@ -494,7 +671,7 @@ DECLARE_LOCAL_FUNC continue_execution
     mov     SE_WORDSIZE*14(%xcx), %r14
     mov     SE_WORDSIZE*15(%xcx), %r15
     push    SE_WORDSIZE*16(%xcx)
-    popf    # make sure the following instructions do not affect flags
+    popf    /* make sure the following instructions do not affect flags */
 #else
     push    SE_WORDSIZE*8(%xcx)
     popf
@@ -503,13 +680,28 @@ DECLARE_LOCAL_FUNC continue_execution
 #ifdef LINUX64
     mov     SE_WORDSIZE*17(%xcx), %xcx
 #else
-    mov     SE_WORDSIZE*9(%xcx), %xcx  # xcx: xip
+    mov     SE_WORDSIZE*9(%xcx), %xcx  /* xcx: xip */
 #endif
 
-# do not setup the new stack until info is not needed any more
-# otherwise, info will be overwritten
-    mov     %xcx, (%xax)               # save xip to the new stack
-    pop     %xcx                       # restore xcx
-    pop     %xsp                       # xsp: xax
+/* do not setup the new stack until info is not needed any more
+ * otherwise, info will be overwritten
+ */
+    mov     %xcx, (%xax)               /* save xip to the new stack */
+    pop     %xcx                       /* restore xcx */
+    pop     %xsp                       /* xsp: xax */
     xchg    %xax, %xsp
-    ret
+
+    ret     $(RED_ZONE_SIZE)           /* pop xip and red zone (if any) */
+
+/* 
+ * -------------------------------------------------------------------------
+ * extern "C" __attribute__((regparm(1))) void second_phase(sgx_exception_info_t *info, 
+ *   void *new_sp, void *second_phase_handler_addr);
+ * -------------------------------------------------------------------------
+ */
+DECLARE_LOCAL_FUNC second_phase
+    movq    %xsi, %xsp
+    mov     $SE_EDECCSSA, %xax
+    enclu                               /* DECCSSA */
+    jmp     *%xdx
+    

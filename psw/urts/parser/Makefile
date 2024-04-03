@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -31,13 +31,23 @@
 
 include ../../../buildenv.mk
 
+ifdef DEBUG
+CXXFLAGS += -USE_DEBUG_LEVEL -DSE_DEBUG_LEVEL=SE_TRACE_DEBUG #-DSE_DEBUG_LEVEL=SE_TRACE_WARNING
+else
+CXXFLAGS += -USE_DEBUG_LEVEL -DSE_DEBUG_LEVEL=SE_TRACE_NOTICE
+endif
+
+ifdef SIGN_TOOL
+CXXFLAGS += -DSIGN
+endif
+
 SRCS := $(wildcard *.cpp)
 SRCS := $(filter-out elfparser.cpp, $(SRCS))
 OBJS := $(sort $(SRCS:.cpp=.o))
 
 TARGET := libenclaveparser.a
 
-CXXFLAGS += -fPIC -USE_DEBUG_LEVEL -DSE_DEBUG_LEVEL=SE_TRACE_WARNING
+CXXFLAGS += -fPIC
 
 ifneq ($(HOST_OS), darwin)
   CXXFLAGS += -Werror

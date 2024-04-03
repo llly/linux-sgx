@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -101,7 +101,7 @@ typedef struct sample_ra_msg2_t
                                                   Little-Endian*/
     sample_spid_t               spid;       /* In little endian*/
     uint16_t                    quote_type; /* unlinkable Quote(0) or linkable Quote(0) in little endian*/
-    uint16_t                    kdf_id;     /* key derivation function id in little endian. 
+    uint16_t                    kdf_id;     /* key derivation function id in little endian.
                                              0x0001 for AES-CMAC Entropy Extraction and Key Derivation */
     sample_ec_sign256_t         sign_gb_ga; /* In little endian*/
     sample_mac_t                mac;        /* mac_smk(g_b||spid||quote_type||
@@ -120,7 +120,7 @@ typedef struct sample_ra_msg3_t
 } sample_ra_msg3_t;
 
 int sp_ra_proc_msg0_req(const sample_ra_msg0_t *p_msg0,
-    uint32_t msg0_size);
+    uint32_t msg0_size, ra_samp_response_header_t **pp_msg0_resp);
 
 int sp_ra_proc_msg1_req(const sample_ra_msg1_t *p_msg1,
 						uint32_t msg1_size,
@@ -141,7 +141,7 @@ typedef int (*sample_enroll)(int sp_credentials, sample_spid_t* spid,
 typedef int(*sample_get_sigrl)(const sample_epid_group_id_t gid, uint32_t* p_sig_rl_size,
     uint8_t** p_sig_rl);
 
-typedef int(*sample_verify_attestation_evidence)(sample_quote_t* p_isv_quote,
+typedef int(*sample_verify_attestation_evidence)(const sample_quote_t* p_isv_quote,
     uint8_t* pse_manifest,
     ias_att_report_t* attestation_verification_report);
 

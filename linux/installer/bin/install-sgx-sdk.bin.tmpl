@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -69,6 +69,8 @@ select_install_path()
 }
 
 
+umask 022
+
 prev=
 for option
 do
@@ -114,8 +116,7 @@ fi
 
 USER_INPUT_PATH=$(cd "$USER_INPUT_PATH"; pwd -P)
 
-PATH=/usr/bin:/bin
-umask 022
+PATH=/usr/bin:/bin:$PATH
 
 SDKPKG=`mktemp -t sgx-sdk-pkg.XXXXXX`
 SDK_TEMP_FOLDER=`mktemp -d sgx-sdk-XXXXXX -p /tmp`
@@ -156,11 +157,11 @@ pushd ${SDK_TEMP_FOLDER}
 
 sed -i "s#\(SGX_PACKAGES_PATH=\).*#\1$USER_INPUT_PATH#" scripts/installConfig
 source scripts/installConfig
-make install INSTALLER_FORM=BIN
+make install INSTALLER_FORMAT=BIN
 
 popd
 
-${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/scripts/install.sh BIN
+${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/scripts/install.sh
 
 rm -fr ${SDK_TEMP_FOLDER}
 
@@ -171,10 +172,22 @@ export_the_simulation()
     else
         rm -f ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/sdk_libs/libsgx_urts_sim.so
         rm -f ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/sdk_libs/libsgx_uae_service_sim.so
+        rm -f ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/sdk_libs/libsgx_quote_ex_sim.so
+        rm -f ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/sdk_libs/libsgx_launch_sim.so
+        rm -f ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/sdk_libs/libsgx_epid_sim.so
     fi
-    ln -s ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/${LIB_DIR}/libsgx_urts_sim.so ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/sdk_libs/ 
-    ln -s ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/${LIB_DIR}/libsgx_uae_service_sim.so ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/sdk_libs/ 
-} 
+    ln -s ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/${LIB_DIR}/libsgx_urts_sim.so ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/sdk_libs/
+    ln -s ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/${LIB_DIR}/libsgx_uae_service_sim.so ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/sdk_libs/
+    ln -s ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/${LIB_DIR}/libsgx_quote_ex_sim.so ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/sdk_libs/
+    ln -s ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/${LIB_DIR}/libsgx_launch_sim.so ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/sdk_libs/
+    ln -s ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/${LIB_DIR}/libsgx_epid_sim.so ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/sdk_libs/
+}
+
+create_urts_soname_link()
+{
+    URTS_SONAME=`objdump -p ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/${LIB_DIR}/libsgx_urts.so | grep SONAME | awk '{print $2}'`
+    ln -fs ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/${LIB_DIR}/libsgx_urts.so ${SGX_PACKAGES_PATH}/${SDK_PKG_NAME}/${LIB_DIR}/${URTS_SONAME}
+}
 
 generate_environment_script()
 {
@@ -192,6 +205,7 @@ EOF
 }
 
 export_the_simulation
+create_urts_soname_link
 generate_environment_script
 
 echo """

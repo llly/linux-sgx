@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -59,6 +59,12 @@ const sgx_cpu_svn_t DOWNGRADED_CPUSVN = {
     }
 };
 
+// use secs->reserved4 field to save isv_family_id and isv_ext_prod_id.
+typedef struct _isv_ext_id_t
+{
+    sgx_isvfamily_id_t isv_family_id;      /* ISV assigned Family ID */
+    sgx_isvext_prod_id_t isv_ext_prod_id;  /* ISV assigned Extended Product ID */
+} isv_ext_id_t;
 
 typedef struct _global_data_sim_t
 {
@@ -66,6 +72,8 @@ typedef struct _global_data_sim_t
     sgx_cpu_svn_t cpusvn_sim;
     uint64_t seed;      /* to initialize the PRNG */
 } global_data_sim_t;
+
+extern global_data_sim_t g_global_data_sim;
 
 #ifdef __cplusplus
 }

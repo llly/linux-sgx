@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -47,9 +47,13 @@ let get_string_from_attr (v: Ast.attr_value) (err_func: int -> string) =
       Ast.AString s -> s
     | Ast.ANumber n -> err_func n
 
-(* Check whether 'size' or 'sizefunc' is specified. *)
+(* Check whether 'size' is specified. *)
 let has_size (sattr: Ast.ptr_size) =
-  sattr.Ast.ps_size <> None || sattr.Ast.ps_sizefunc <> None
+  sattr.Ast.ps_size <> None
+  
+(* Check whether 'count' is specified. *)
+let has_count (sattr: Ast.ptr_size) =
+  sattr.Ast.ps_count <> None
 
 (* Pointers can have the following attributes:
  *
@@ -58,9 +62,6 @@ let has_size (sattr: Ast.ptr_size) =
  *
  * 'count'    - indicates how many of items is managed by the pointer
  *              e.g. count = 100, count = n ('n' is a parameter);
- *
- * 'sizefunc' - use a function to compute the size of the pointer.
- *              e.g. sizefunc = get_ptr_size
  *
  * 'string'   - indicate the pointer is managing a C string;
  * 'wstring'  - indicate the pointer is managing a wide char string.
@@ -74,9 +75,9 @@ let has_size (sattr: Ast.ptr_size) =
  * 'in'       - the pointer is used as input
  * 'out'      - the pointer is used as output
  *
- * Note that 'size' and 'sizefunc' are mutual exclusive (but they can
- * be used together with 'count'.  'string' and 'wstring' indicates 'isptr',
- * and they cannot use with only an 'out' attribute.
+ * Note that 'size' can be used together with 'count'.
+ * 'string' and 'wstring' indicates 'isptr',
+ * and they cannot be used with only an 'out' attribute.
  *)
 let get_ptr_attr (attr_list: (string * Ast.attr_value) list) =
   let get_new_dir (cds: string) (cda: Ast.ptr_direction) (old: Ast.ptr_direction) =
@@ -85,19 +86,28 @@ let get_ptr_attr (attr_list: (string * Ast.attr_value) list) =
     else if old = cda           then failwithf "duplicated attribute: `%s'" cds
     else Ast.PtrInOut
   in
+  (* only one 'size' attribute allowed. *)
+  let get_new_size (new_value: Ast.attr_value) (old_ptr_size: Ast.ptr_size) =
+    if has_size old_ptr_size then
+     failwithf "duplicated attribute: `size'"
+    else new_value
+  in
+  (* only one 'count' attribute allowed. *)
+  let get_new_count (new_value: Ast.attr_value) (old_ptr_size: Ast.ptr_size) =
+    if has_count old_ptr_size then
+      failwithf "duplicated attribute: `count'"
+    else new_value
+  in
   let update_attr (key: string) (value: Ast.attr_value) (res: Ast.ptr_attr) =
     match key with
         "size"     ->
-        { res with Ast.pa_size = { res.Ast.pa_size with Ast.ps_size  = Some value }}
+        { res with Ast.pa_size = { res.Ast.pa_size with Ast.ps_size  = Some(get_new_size value res.Ast.pa_size)}}
       | "count"    ->
-        { res with Ast.pa_size = { res.Ast.pa_size with Ast.ps_count = Some value }}
+        { res with Ast.pa_size = { res.Ast.pa_size with Ast.ps_count = Some(get_new_count value res.Ast.pa_size)}}
       | "sizefunc" ->
-        let efn n = failwithf "invalid function name (%d) for `sizefunc'" n in
-        let funcname = get_string_from_attr value efn
-        in { res with Ast.pa_size =
-            { res.Ast.pa_size with Ast.ps_sizefunc = Some funcname }}
-      | "string"  -> { res with Ast.pa_isptr = true; Ast.pa_isstr = true; }
-      | "wstring" -> { res with Ast.pa_isptr = true; Ast.pa_iswstr = true; }
+        failwithf "The attribute 'sizefunc' is deprecated. Please use 'size' attribute instead."
+      | "string"  -> { res with Ast.pa_isstr = true; }
+      | "wstring" -> { res with Ast.pa_iswstr = true; }
       | "isptr"   -> { res with Ast.pa_isptr = true }
       | "isary"   -> { res with Ast.pa_isary = true }
 
@@ -117,6 +127,17 @@ let get_ptr_attr (attr_list: (string * Ast.attr_value) list) =
         [] -> res_attr
       | (k,v) :: xs -> do_get_ptr_attr xs (update_attr k v res_attr)
   in
+    do_get_ptr_attr attr_list            { Ast.pa_direction = Ast.PtrNoDirection;
+                                           Ast.pa_size = Ast.empty_ptr_size;
+                                           Ast.pa_isptr = false;
+                                           Ast.pa_isary = false;
+                                           Ast.pa_isstr = false;
+                                           Ast.pa_iswstr = false;
+                                           Ast.pa_rdonly = false;
+                                           Ast.pa_chkptr = true;
+                                         }
+
+let get_param_ptr_attr (attr_list: (string * Ast.attr_value) list) =
   let has_str_attr (pattr: Ast.ptr_attr) =
     if pattr.Ast.pa_isstr && pattr.Ast.pa_iswstr
     then failwith "`string' and `wstring' are mutual exclusive"
@@ -124,16 +145,13 @@ let get_ptr_attr (attr_list: (string * Ast.attr_value) list) =
   in
   let check_invalid_ptr_size (pattr: Ast.ptr_attr) =
     let ps = pattr.Ast.pa_size in
-      if ps.Ast.ps_size <> None && ps.Ast.ps_sizefunc <> None
-      then failwith  "`size' and `sizefunc' cannot be used at the same time"
+      if ps <> Ast.empty_ptr_size && has_str_attr pattr
+      then failwith "size attributes are mutual exclusive with (w)string attribute"
       else
-        if ps <> Ast.empty_ptr_size && has_str_attr pattr
-        then failwith "size attributes are mutual exclusive with (w)string attribute"
-        else
-          if (ps <> Ast.empty_ptr_size || has_str_attr pattr) &&
-            pattr.Ast.pa_direction = Ast.PtrNoDirection
-          then failwith "size/string attributes must be used with pointer direction"
-          else pattr
+        if (ps <> Ast.empty_ptr_size || has_str_attr pattr) &&
+          pattr.Ast.pa_direction = Ast.PtrNoDirection
+        then failwith "size/string attributes must be used with pointer direction"
+        else pattr
   in
   let check_ptr_dir (pattr: Ast.ptr_attr) =
     if pattr.Ast.pa_direction <> Ast.PtrNoDirection && pattr.Ast.pa_chkptr = false
@@ -142,8 +160,8 @@ let get_ptr_attr (attr_list: (string * Ast.attr_value) list) =
       if pattr.Ast.pa_direction = Ast.PtrNoDirection && pattr.Ast.pa_chkptr
       then failwith "pointer/array should have direction attribute or `user_check'"
       else
-        if pattr.Ast.pa_direction = Ast.PtrOut && (has_str_attr pattr || pattr.Ast.pa_size.Ast.ps_sizefunc <> None)
-        then failwith "string/wstring/sizefunc should be used with an `in' attribute"
+        if pattr.Ast.pa_direction = Ast.PtrOut && has_str_attr pattr
+        then failwith "string/wstring should be used with an `in' attribute"
         else pattr
   in
   let check_invalid_ary_attr (pattr: Ast.ptr_attr) =
@@ -161,19 +179,20 @@ let get_ptr_attr (attr_list: (string * Ast.attr_value) list) =
         then failwith "`isary' cannot be used with `string/wstring' together"
         else failwith "`isary' cannot be used with `isptr' together"
   in
-  let pattr = do_get_ptr_attr attr_list { Ast.pa_direction = Ast.PtrNoDirection;
-                                          Ast.pa_size = Ast.empty_ptr_size;
-                                          Ast.pa_isptr = false;
-                                          Ast.pa_isary = false;
-                                          Ast.pa_isstr = false;
-                                          Ast.pa_iswstr = false;
-                                          Ast.pa_rdonly = false;
-                                          Ast.pa_chkptr = true;
-                                        }
+  let pattr = get_ptr_attr attr_list in
+  if pattr.Ast.pa_isary
+  then check_invalid_ary_attr pattr
+  else check_invalid_ptr_size pattr |> check_ptr_dir
+
+    
+let get_member_ptr_attr (attr_list: (string * Ast.attr_value) list) =
+  let check_invalid_ptr_size (pattr: Ast.ptr_attr) =
+          if pattr.Ast.pa_size = Ast.empty_ptr_size
+          then failwith "size/count attributes must be used"
+          else pattr
   in
-    if pattr.Ast.pa_isary
-    then check_invalid_ary_attr pattr
-    else check_invalid_ptr_size pattr |> check_ptr_dir
+  let pattr = get_ptr_attr attr_list in
+  check_invalid_ptr_size pattr
 
 (* Untrusted functions can have these attributes:
  *
@@ -234,15 +253,51 @@ let check_ptr_attr (fd: Ast.func_decl) range =
     then failwithf "`%s': void pointer `%s' - buffer size unknown" fname identifier
     else ()
   in
+  let check_string_ptr_size (atype: Ast.atype) (pattr: Ast.ptr_attr) (identifier: string) =
+    if (pattr.Ast.pa_isstr)
+    then
+      match atype with
+      Ast.Ptr(Ast.Char(_)) -> ()
+      | _ -> failwithf "`%s': invalid 'string' attribute - `%s' is not char pointer." fname identifier
+    else
+      if (atype <> Ast.Ptr(Ast.WChar) &&  pattr.Ast.pa_iswstr)
+      then failwithf "`%s': invalid 'wstring' attribute - `%s' is not wchar_t pointer." fname identifier
+      else ()
+  in
+  let check_array_dims (atype: Ast.atype) (pattr: Ast.ptr_attr) (declr: Ast.declarator) =
+    if Ast.is_array declr then
+      if has_size pattr.Ast.pa_size then
+        failwithf "`%s': invalid 'size' attribute - `%s' is explicitly declared array." fname declr.Ast.identifier
+      else if has_count pattr.Ast.pa_size then
+        failwithf "`%s': invalid 'count' attribute - `%s' is explicitly declared array." fname declr.Ast.identifier
+      else if pattr.Ast.pa_isary then
+        failwithf "`%s': invalid 'isary' attribute - `%s' is explicitly declared array." fname declr.Ast.identifier
+    else ()
+  in
+  let check_pointer_array (atype: Ast.atype) (pattr: Ast.ptr_attr) (declr: Ast.declarator) = 
+    let is_ary = (Ast.is_array declr || pattr.Ast.pa_isary) in
+    let is_ptr  =
+      match atype with
+        Ast.Ptr _ -> true
+      | _         -> pattr.Ast.pa_isptr
+    in
+    if is_ary && is_ptr then
+      failwithf "`%s': Pointer array not allowed - `%s' is a pointer array." fname declr.Ast.identifier 
+    else ()
+  in
   let checker (pd: Ast.pdecl) =
     let pt, declr = pd in
     let identifier = declr.Ast.identifier in
       match pt with
           Ast.PTVal _ -> ()
         | Ast.PTPtr(atype, pattr) ->
-          if atype <> Ast.Ptr(Ast.Void) then check_const pattr identifier
-          else (* 'void' pointer, check there is a size or 'user_check' *)
+          if atype = Ast.Ptr(Ast.Void) then (* 'void' pointer, check there is a size or 'user_check' *)
             check_void_ptr_size pattr identifier
+          else
+            check_pointer_array atype pattr declr;
+            check_const pattr identifier;
+            check_string_ptr_size atype pattr identifier;
+            check_array_dims atype pattr declr
   in
     List.iter checker fd.Ast.plist
 %}
@@ -253,6 +308,7 @@ let check_ptr_attr (fd: Ast.func_decl) range =
 %token TLBrace TRBrace
 %token TLBrack TRBrack
 %token Tpublic
+%token Tswitchless
 %token Tinclude
 %token Tconst
 %token <string>Tidentifier
@@ -362,11 +418,33 @@ declarator: Tidentifier    { { Ast.identifier = $1; Ast.array_dims = []; } }
  * to tell whether the identifier is followed by array dimensions.
 */
 param_type: attr_block all_type {
+    let attr = get_param_ptr_attr $1 in
+    (*check the type is build in type or used defined type.*)
+    let rec is_foreign s =
+      match s with
+        Ast.Ptr(a) -> is_foreign a
+      | Ast.Foreign _ -> true
+      | _ -> false
+    in
+    let is_bare_foreign s =
+      match s with
+      | Ast.Foreign _ -> true
+      | _ -> false
+    in
+    (*'isptr', 'isary', only allowed for bare user defined type.*)
+    (*'readonly' only allowed for user defined type.*)
+    if attr.Ast.pa_isptr && not (is_bare_foreign $2) then
+      failwithf "'isptr', attributes are only for user defined type, not for `%s'." (Ast.get_tystr $2)
+    else if attr.Ast.pa_isary && not (is_bare_foreign $2) then
+      failwithf "'isary', attributes are only for user defined type, not for `%s'." (Ast.get_tystr $2)
+    else if attr.Ast.pa_rdonly && not (is_foreign $2) then
+      failwithf "'readonly', attributes are only for user defined type, not for `%s'." (Ast.get_tystr $2)
+    else if attr.Ast.pa_rdonly && not (attr.Ast.pa_isptr) then
+      failwithf "'readonly' attribute is only used with 'isptr' attribute."    else
     match $2 with
-      Ast.Ptr _ -> fun x -> Ast.PTPtr($2, get_ptr_attr $1)
+      Ast.Ptr _ -> fun x -> Ast.PTPtr($2, get_param_ptr_attr $1)
     | _         ->
       if $1 <> [] then
-        let attr = get_ptr_attr $1 in
         match $2 with
           Ast.Foreign s ->
             if attr.Ast.pa_isptr || attr.Ast.pa_isary then fun x -> Ast.PTPtr($2, attr)
@@ -374,15 +452,75 @@ param_type: attr_block all_type {
               (* thinking about 'user_defined_type var[4]' *)
               fun is_ary ->
                 if is_ary then Ast.PTPtr($2, attr)
-                else failwithf "`%s' is considerred plain type but decorated with pointer attributes" s
+                else failwithf "`%s' is considered plain type but decorated with pointer attributes" s
         | _ ->
           fun is_ary ->
             if is_ary then Ast.PTPtr($2, attr)
             else failwithf "unexpected pointer attributes for `%s'" (Ast.get_tystr $2)
       else
         fun is_ary ->
-          if is_ary then Ast.PTPtr($2, get_ptr_attr [])
+          if is_ary then Ast.PTPtr($2, get_param_ptr_attr [])
           else  Ast.PTVal $2
+    }
+  | all_type {
+    match $1 with
+      Ast.Ptr _ -> fun x -> Ast.PTPtr($1, get_param_ptr_attr [])
+    | _         ->
+      fun is_ary ->
+        if is_ary then Ast.PTPtr($1, get_param_ptr_attr [])
+        else  Ast.PTVal $1
+    }
+  | attr_block Tconst type_spec pointer {
+      let attr = get_param_ptr_attr $1
+      in fun x -> Ast.PTPtr($4 $3, { attr with Ast.pa_rdonly = true })
+    }
+  | Tconst type_spec pointer {
+      let attr = get_param_ptr_attr []
+      in fun x -> Ast.PTPtr($3 $2, { attr with Ast.pa_rdonly = true })
+    }
+  ;
+
+
+/* Available types as struct member.
+ *
+ * Instead of returning an value of 'Ast.parameter_type', we return
+ * a lambda which wraps the actual type since so far there is no way
+ * to tell whether the identifier is followed by array dimensions.
+*/
+smember_type: attr_block all_type {
+    let attr = get_member_ptr_attr $1 in
+    (*'isptr', 'isary', 'readonly' not allowed.*)
+    if attr.Ast.pa_direction <> Ast.PtrNoDirection then
+      failwithf "direction attribute is not allowed for structure member."
+    else if attr.Ast.pa_isptr then
+      failwithf "'isptr', attribute is not allowed for structure member."
+    else if attr.Ast.pa_isary then
+      failwithf "'isary', attribute is not allowed for structure member."
+    else if attr.Ast.pa_rdonly then
+      failwithf "'readonly'attribute is not allowed for structure member."
+    else if attr.Ast.pa_isstr then
+      failwithf "'string'attribute is not allowed for structure member."
+    else if attr.Ast.pa_iswstr then
+      failwithf "'wstring' attribute is not allowed for structure member."
+    else
+    match $2 with
+      Ast.Ptr _ -> fun x -> Ast.PTPtr($2, get_member_ptr_attr $1)
+    | _         ->
+      if $1 <> [] then
+        match $2 with
+          Ast.Foreign s ->
+              (* thinking about 'user_defined_type var[4]' *)
+              fun is_ary ->
+                if is_ary then Ast.PTPtr($2, attr)
+                else failwithf "`%s' is considered plain type but decorated with pointer attributes" s
+        | _ ->
+          fun is_ary ->
+            if is_ary then Ast.PTPtr($2, attr)
+            else failwithf "'%s' specified deep copy, but it's not a pointer" (Ast.get_tystr $2)
+      else
+        fun is_ary ->
+          if is_ary then Ast.PTPtr($2, get_ptr_attr [])
+          else Ast.PTVal $2
     }
   | all_type {
     match $1 with
@@ -391,17 +529,8 @@ param_type: attr_block all_type {
       fun is_ary ->
         if is_ary then Ast.PTPtr($1, get_ptr_attr [])
         else  Ast.PTVal $1
-    }
-  | attr_block Tconst type_spec pointer {
-      let attr = get_ptr_attr $1
-      in fun x -> Ast.PTPtr($4 $3, { attr with Ast.pa_rdonly = true })
-    }
-  | Tconst type_spec pointer {
-      let attr = get_ptr_attr []
-      in fun x -> Ast.PTPtr($3 $2, { attr with Ast.pa_rdonly = true })
-    }
+  }
   ;
-
 
 attr_block: TLBrack TRBrack       { failwith "no attribute specified." }
   | TLBrack key_val_pairs TRBrack { $2 }
@@ -420,15 +549,15 @@ struct_specifier: Tstruct Tidentifier { Ast.Struct($2) }
 union_specifier:  Tunion  Tidentifier { Ast.Union($2) }
 enum_specifier:   Tenum   Tidentifier { Ast.Enum($2) }
 
-struct_definition: struct_specifier TLBrace member_list TRBrace {
+struct_definition: struct_specifier TLBrace struct_member_list TRBrace {
     let s = { Ast.sname = (match $1 with Ast.Struct s -> s | _ -> "");
-              Ast.mlist = List.rev $3; }
+              Ast.smlist = List.rev $3; }
     in Ast.StructDef(s)
   }
 
-union_definition: union_specifier TLBrace member_list TRBrace {
-    let s = { Ast.sname = (match $1 with Ast.Union s -> s | _ -> "");
-              Ast.mlist = List.rev $3; }
+union_definition: union_specifier TLBrace union_member_list TRBrace {
+    let s = { Ast.uname = (match $1 with Ast.Union s -> s | _ -> "");
+              Ast.umlist = List.rev $3; }
     in Ast.UnionDef(s)
   }
 
@@ -462,11 +591,33 @@ composite_defs: struct_definition     { $1 }
   | enum_definition                   { $1 }
   ;
 
-member_list: member_def TSemicolon    { [$1] }
-  | member_list member_def TSemicolon { $2 :: $1 }
+struct_member_list: struct_member_def TSemicolon    { [$1] }
+  | struct_member_list struct_member_def TSemicolon { $2 :: $1 }
   ;
 
-member_def: all_type declarator { ($1, $2) }
+union_member_list: union_member_def TSemicolon    { [$1] }
+  | union_member_list union_member_def TSemicolon { $2 :: $1 }
+  ;
+
+struct_member_def: smember_type declarator {
+    let pt = $1 (Ast.is_array $2) in
+    let is_void =
+      match pt with
+        Ast.PTVal v -> v = Ast.Void
+      | _           -> false
+    in
+    if is_void then
+      failwithf "parameter `%s' has `void' type." $2.Ast.identifier
+    else
+      (pt, $2)
+}
+
+union_member_def: all_type declarator {
+    if $1 = Ast.Void then
+      failwithf "union member `%s' has `void' type." $2.Ast.identifier
+    else
+      ($1, $2)
+}
 
 /* Importing declarations.
  * ------------------------------------------------------------------------
@@ -519,10 +670,15 @@ access_modifier: /* nothing */ { true }
   | Tpublic                    { false  }
   ;
 
+/* is_switchless? Default to false. */
+switchless_annotation: /* nothing */ { false }
+  | Tswitchless                      { true  }
+  ;
+
 trusted_functions: /* nothing */          { [] }
-  | trusted_functions access_modifier func_def TSemicolon {
+  | trusted_functions access_modifier func_def switchless_annotation TSemicolon {
       check_ptr_attr $3 (symbol_start_pos(), symbol_end_pos());
-      Ast.Trusted { Ast.tf_fdecl = $3; Ast.tf_is_priv = $2 } :: $1
+      Ast.Trusted { Ast.tf_fdecl = $3; Ast.tf_is_priv = $2; Ast.tf_is_switchless = $4 } :: $1
     }
   ;
 
@@ -565,15 +721,19 @@ propagate_errno: /* nothing */ { false }
   | Tpropagate_errno           { true  }
   ;
 
-untrusted_func_def: attr_block func_def allow_list propagate_errno {
+untrusted_prefixes: /* nothing */ { [] }
+  | attr_block           { $1  }
+  ;
+
+untrusted_postfixes:  /* nothing */  {  (false, false) }
+  | Tpropagate_errno switchless_annotation  { (true, $2) }
+  | Tswitchless propagate_errno  { ($2, true) }
+  ;
+
+untrusted_func_def: untrusted_prefixes func_def allow_list untrusted_postfixes {
       check_ptr_attr $2 (symbol_start_pos(), symbol_end_pos());
       let fattr = get_func_attr $1 in
-      Ast.Untrusted { Ast.uf_fdecl = $2; Ast.uf_fattr = fattr; Ast.uf_allow_list = $3; Ast.uf_propagate_errno = $4 }
-    }
-  | func_def allow_list propagate_errno {
-      check_ptr_attr $1 (symbol_start_pos(), symbol_end_pos());
-      let fattr = get_func_attr [] in
-      Ast.Untrusted { Ast.uf_fdecl = $1; Ast.uf_fattr = fattr; Ast.uf_allow_list = $2; Ast.uf_propagate_errno = $3 }
+      Ast.Untrusted { Ast.uf_fdecl = $2; Ast.uf_fattr = fattr; Ast.uf_allow_list = $3; Ast.uf_propagate_errno = fst $4; Ast.uf_is_switchless = snd $4; }
     }
   ;
 

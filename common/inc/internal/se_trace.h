@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -41,49 +41,69 @@
 
 typedef enum
 {
-	SE_TRACE_ERROR,
-	SE_TRACE_WARNING,
-	SE_TRACE_NOTICE,
-	SE_TRACE_DEBUG
+    SE_TRACE_NONE,
+    SE_TRACE_ERROR,
+    SE_TRACE_WARNING,
+    SE_TRACE_NOTICE,
+    SE_TRACE_DEBUG
 } se_trace_t;
 
 #ifndef SE_DEBUG_LEVEL
 /* Each module need define their own SE_DEBUG_LEVEL */
-#define SE_DEBUG_LEVEL SE_TRACE_ERROR
+__attribute__((weak)) se_trace_t sgx_trace_loglevel = SE_TRACE_NONE;
+#else
+__attribute__((weak)) se_trace_t sgx_trace_loglevel = (se_trace_t)SE_DEBUG_LEVEL;
 #endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
-int se_trace_internal(int debug_level, const char *fmt, ...);
+void se_trace_internal(int debug_level, const char *fmt, ...);
+void sgx_proc_log_report_default(int channel, int debug_level, const char* fmt, ...);
+void  __attribute__((weak)) sgx_proc_log_report(int level, const char* format, ...);
 
+typedef void (*sgx_logging_callback_t)(int level, const char* message);
+
+__attribute__((weak)) sgx_logging_callback_t sgx_trace_logger_callback = NULL;
 #ifdef __cplusplus
 }
 #endif
 
+
 /* For libraries, we usually define DISABLE_TRACE to disable any trace. */
 /* For apps, we usually enable trace. */
-#ifdef DISABLE_TRACE
-#define SE_TRACE(...)
-#define se_trace(...)
-#else /* DISABLE_TRACE */
-#define se_trace(debug_level, fmt, ...)     \
-    do {                                    \
-        if(debug_level <= SE_DEBUG_LEVEL)   \
-            se_trace_internal(debug_level, fmt, ##__VA_ARGS__);       \
+#define se_trace_verbose(debug_level, fmt, ...)     \
+    do {                                            \
+        se_trace_t trace_level = debug_level;       \
+        if(trace_level <= sgx_trace_loglevel)       \
+            se_trace_internal(trace_level, "[%s %s:%d] " fmt, __FUNCTION__, __FILE__, __LINE__, ##__VA_ARGS__);       \
+    }while(0)
+
+#define se_trace(debug_level, fmt, ...)         \
+    do {                                        \
+        se_trace_t trace_level = debug_level;   \
+        if(trace_level <= sgx_trace_loglevel)   \
+            se_trace_internal(trace_level, fmt, ##__VA_ARGS__);       \
     }while(0)
 
 /* For compatibility, SE_TRACE/se_trace is used in old code. */
 /* New code should use SE_TRACE_DEBUG, SE_TRACE_NOTICE, SE_TRACE_WARNING, SE_TRACE_ERROR */
 #define SE_TRACE(debug_level, fmt, ...) \
-	    se_trace(debug_level, "[%s %s:%d] " fmt, __FUNCTION__, __FILE__, __LINE__, ##__VA_ARGS__)
-#endif/* DISABLE_TRACE */
+        se_trace_verbose(debug_level, fmt, ##__VA_ARGS__)
 
-/* SE_TRACE_DEBUG and SE_TRACE_NOTICE print the debug information plus message. */
-#define SE_TRACE_DEBUG(fmt, ...) se_trace(SE_TRACE_DEBUG, "[%s %s:%d] " fmt, __FUNCTION__, __FILE__, __LINE__, ##__VA_ARGS__)
-#define SE_TRACE_NOTICE(fmt, ...) se_trace(SE_TRACE_NOTICE, "[%s %s:%d] " fmt, __FUNCTION__, __FILE__, __LINE__, ##__VA_ARGS__)
-/* SE_TRACE_WARNING and SE_TRACE_ERROR only print message. */
-#define SE_TRACE_WARNING(fmt, ...) se_trace(SE_TRACE_WARNING, fmt, ##__VA_ARGS__)
-#define SE_TRACE_ERROR(fmt, ...) se_trace(SE_TRACE_ERROR, fmt, ##__VA_ARGS__)
+/* Print the debug information plus message. */
+#define SE_TRACE_DEBUG(fmt, ...) se_trace_verbose(SE_TRACE_DEBUG, fmt, ##__VA_ARGS__)
+#define SE_TRACE_NOTICE(fmt, ...) se_trace_verbose(SE_TRACE_NOTICE, fmt, ##__VA_ARGS__)
+#define SE_TRACE_WARNING(fmt, ...) se_trace_verbose(SE_TRACE_WARNING, fmt, ##__VA_ARGS__)
+#define SE_TRACE_ERROR(fmt, ...) se_trace_verbose(SE_TRACE_ERROR, fmt, ##__VA_ARGS__)
 
+/* SE_PROD_LOG will output message to stdout by default in production mode.
+   When the executable is running as daemon, it will output to syslog. */
+#define SE_PROD_LOG(fmt, ...)                                                                                       \
+    do {                                                                                                            \
+        if(sgx_proc_log_report) {                                                                                   \
+            sgx_proc_log_report(1, "[%s %s:%d] " fmt, __FUNCTION__, __FILE__, __LINE__, ##__VA_ARGS__);             \
+        } else {                                                                                                    \
+            se_trace_internal(SE_TRACE_ERROR, "[%s %s:%d] " fmt, __FUNCTION__, __FILE__, __LINE__, ##__VA_ARGS__);  \
+        }                                                                                                           \
+    }while(0)
 #endif

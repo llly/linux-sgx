@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -41,11 +41,30 @@
 extern "C" {
 #endif
 
+size_t get_enclave_size(void);
+size_t get_enclave_end(void);
 void * get_heap_base(void);
 size_t get_heap_size(void);
+size_t get_heap_min_size(void);
+void * get_rsrv_base(void);
+size_t get_rsrv_end(void);
+size_t get_rsrv_size(void);
+size_t get_rsrv_min_size(void);
 int * get_errno_addr(void);
 bool is_stack_addr(void *address, size_t size);
 bool is_valid_sp(uintptr_t sp);
+
+int heap_init(void *_heap_base, size_t _heap_size, size_t _heap_min_size, int _is_edmm_supported);
+int feature_supported(const uint64_t *feature_set, uint32_t feature_shift);
+bool is_utility_thread();
+size_t get_max_tcs_num();
+bool is_pkru_enabled();
+
+bool is_tcs_binding_mode();
+
+size_t get_xsave_size();
+
+int get_ssa_aexnotify();
 
 
 #ifdef __cplusplus

@@ -43,19 +43,12 @@
 typedef __size_t    size_t;
 #endif
 
-#ifdef _TLIBC_WIN_
-#if !defined(_WCHAR_T_DEFINED) && !defined (_NATIVE_WCHAR_T_DEFINED)
-#define _WCHAR_T_DEFINED
-typedef unsigned short  wchar_t;
-#endif
-#else
 #if !defined(_WCHAR_T_DEFINED_) && !defined(__cplusplus)
 #define _WCHAR_T_DEFINED_
 #ifndef __WCHAR_TYPE__
 #define __WCHAR_TYPE__ int
 #endif
 typedef __WCHAR_TYPE__ wchar_t;
-#endif
 #endif
 
 #ifndef _DIV_T_DEFINED
@@ -93,6 +86,7 @@ typedef struct {
 __BEGIN_DECLS
 
 _TLIBC_NORETURN_ void _TLIBC_CDECL_ abort(void);
+int     _TLIBC_CDECL_ atexit(void (*)(void));
 int     _TLIBC_CDECL_ abs(int);
 double  _TLIBC_CDECL_ atof(const char *);
 int     _TLIBC_CDECL_ atoi(const char *);
@@ -105,6 +99,12 @@ long    _TLIBC_CDECL_ labs(long);
 ldiv_t  _TLIBC_CDECL_ ldiv(long, long);
 void *  _TLIBC_CDECL_ malloc(size_t);
 void *  _TLIBC_CDECL_ memalign(size_t, size_t);
+#ifndef __cplusplus
+int     _TLIBC_CDECL_ posix_memalign(void **, size_t, size_t);
+#else
+int     _TLIBC_CDECL_ posix_memalign(void **, size_t, size_t) throw ();
+#endif
+void *  _TLIBC_CDECL_ aligned_alloc(size_t, size_t);
 void    _TLIBC_CDECL_ qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 void *  _TLIBC_CDECL_ realloc(void *, size_t);
 double  _TLIBC_CDECL_ strtod(const char *, char **);
@@ -136,7 +136,6 @@ size_t  _TLIBC_CDECL_ wcstombs(char *, const wchar_t *, size_t);
 /*
  * Deprecated C99.
  */
-_TLIBC_DEPRECATED_FUNCTION_(int     _TLIBC_CDECL_, atexit, void (_TLIBC_CDECL_ *)(void));
 _TLIBC_DEPRECATED_FUNCTION_(int     _TLIBC_CDECL_, rand, void);
 _TLIBC_DEPRECATED_FUNCTION_(void    _TLIBC_CDECL_, srand, unsigned);
 _TLIBC_DEPRECATED_FUNCTION_(void    _TLIBC_CDECL_, exit, int);

@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -32,11 +32,12 @@
 include ../../buildenv.mk
 
 TCMALLOC := libsgx_tcmalloc.a
-SRCDIR := gperftools-2.5
+SRCDIR := gperftools-2.7
 
-DEBUG_FLAG :=
 ifdef DEBUG
-    DEBUG_FLAG += DEBUG
+    DEBUG_FLAG := DEBUG
+else
+    DEBUG_FLAG := NDEBUG
 endif
 
 .PHONY: all
@@ -45,7 +46,13 @@ all: $(TCMALLOC) | $(BUILD_DIR)
 
 .PHONY: libtcmalloc
 libtcmalloc:
-	cd $(SRCDIR) && ( test -f Makefile || ./autogen-linux.sh $(DEBUG_FLAG)) && $(MAKE)
+	cd $(SRCDIR) && \
+		( test -f Makefile || \
+			CFLAGS="$(CFLAGS)" \
+			CXXFLAGS="$(CXXFLAGS)" \
+			ENCLAVE_CFLAGS="$(ENCLAVE_CFLAGS)" \
+			ENCLAVE_CXXFLAGS="$(ENCLAVE_CXXFLAGS)" ./autogen.sh $(DEBUG_FLAG) ) \
+		&& $(MAKE)
 
 $(TCMALLOC): libtcmalloc
 	$(CP) $(SRCDIR)/.libs/libtcmalloc_minimal.a $(TCMALLOC)

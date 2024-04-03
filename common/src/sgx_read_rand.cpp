@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,11 +33,17 @@
 /* Please add external/rdrand into INCLUDE path and correpondent library to project */
 
 #include <stdint.h>
+#ifndef SERVTD_ATTEST
 #include <memory.h>
+#else
+#include <string.h>
+#endif
 #include <stdlib.h>
 #include "sgx.h"
 #include "sgx_defs.h"
+#ifndef SERVTD_ATTEST
 #include "se_wrapper.h"
+#endif
 #include "rdrand.h"
 #include "cpuid.h"
 #include <stdio.h>
@@ -84,10 +90,14 @@ extern "C" sgx_status_t SGXAPI sgx_read_rand(uint8_t *buf, size_t size)
         g_is_rdrand_supported = rdrand_cpuid();
     }
     if(!g_is_rdrand_supported){
+#ifndef SERVTD_ATTEST
         uint32_t i;
         for(i=0;i<(uint32_t)size;++i){
             buf[i]=(uint8_t)rand();
         }
+#else
+        return SGX_ERROR_UNEXPECTED;
+#endif
     }else{
         int rd_ret =rdrand_get_bytes((uint32_t)size, buf);
         if(rd_ret != RDRAND_SUCCESS){

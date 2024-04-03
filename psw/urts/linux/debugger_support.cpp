@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -121,7 +121,17 @@ extern "C" void push_ocall_frame(uintptr_t frame_point, tcs_t* tcs, CTrustThread
     CEnclave* enclave = trust_thread->get_enclave();
     assert(enclave != NULL);
     enclave->push_ocall_frame(container_of(frame_point, ocall_frame_t, xbp), trust_thread);
-    notify_gdb_to_update(enclave->get_start_address(), tcs, (uintptr_t)container_of(frame_point, ocall_frame_t, xbp));
+    
+    if((enclave->get_debug_info()->elrange_start_address == reinterpret_cast<uint64_t>(enclave->get_start_address())) || 
+        ((enclave->get_debug_info()->enclave_type & ET_SIM) ==ET_SIM))
+    {
+        notify_gdb_to_update(enclave->get_start_address(), tcs, (uintptr_t)container_of(frame_point, ocall_frame_t, xbp));
+    }
+    else
+    {
+        notify_gdb_to_update(reinterpret_cast<void*>(enclave->get_debug_info()->elrange_start_address), 
+            tcs, (uintptr_t)container_of(frame_point, ocall_frame_t, xbp));
+    }
 }
 
 extern "C" void pop_ocall_frame(tcs_t* tcs, CTrustThread *trust_thread)

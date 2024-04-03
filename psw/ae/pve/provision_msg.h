@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -55,7 +55,7 @@ typedef enum _pve_status_t
      PVEC_MALLOC_ERROR,
      PVEC_EPID_BLOB_ERROR,
      PVEC_SE_ERROR,
-     PVEC_IPP_ERROR,
+     PVEC_TCRYPTO_ERROR,
      PVEC_MSG_ERROR,
      PVEC_PEK_SIGN_ERROR,
      PVEC_XEGDSK_SIGN_ERROR,
@@ -80,7 +80,7 @@ typedef enum _prov_stage_t
 
 /*macro definition for RSA-OAEP algorithm
   SHA-256 will be used for the hash generation*/
-#define PVE_RSAOAEP_ENCRYPT_MAXLEN (PVE_RSA_KEY_BYTES - 2*SHA_SIZE_BIT/8 - 2) /*190 bytes at most*/
+#define PVE_RSAOAEP_ENCRYPT_MAXLEN (RSA_3072_KEY_BYTES - 2*SHA_SIZE_BIT/8 - 2) /*190 bytes at most*/
 
 #define SHA_SIZE_BIT  256
 

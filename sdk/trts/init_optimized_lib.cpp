@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,9 +36,11 @@
 #include "sgx_trts.h"
 #include "sgx_attributes.h"
 #include "global_data.h"
+#include "trts_internal.h"
 
 extern "C" int sgx_init_string_lib(uint64_t cpu_feature_indicator);
-extern "C" sgx_status_t sgx_init_crypto_lib(uint64_t cpu_feature_indicator);
+extern "C" sgx_status_t sgx_init_crypto_lib(uint64_t cpu_feature_indicator, uint32_t *cpuinfo_table);
+
 
 static int set_global_feature_indicator(uint64_t feature_bit_array, uint64_t xfrm)
 {
@@ -73,18 +75,27 @@ static int set_global_feature_indicator(uint64_t feature_bit_array, uint64_t xfr
     if(!XFEATURE_ENABLED_AVX(xfrm))
     {
         // AVX is disabled by OS, so clear the AVX related feature bits
-        feature_bit_array &= (~(CPU_FEATURE_AVX | CPU_FEATURE_F16C | CPU_FEATURE_AVX2 | 
-            CPU_FEATURE_FMA | CPU_FEATURE_RTM | CPU_FEATURE_HLE | CPU_FEATURE_BMI |
-            CPU_FEATURE_PREFETCHW | CPU_FEATURE_RDSEED | CPU_FEATURE_ADCOX));
+	feature_bit_array &= (~(CPU_FEATURE_AVX | CPU_FEATURE_VAES | CPU_FEATURE_VPCLMULQDQ | CPU_FEATURE_F16C | CPU_FEATURE_AVX2 |
+            CPU_FEATURE_FMA | CPU_FEATURE_MPX| CPU_FEATURE_RTM | CPU_FEATURE_HLE | CPU_FEATURE_BMI | CPU_FEATURE_RDSEED | CPU_FEATURE_ADX |
+            CPU_FEATURE_AVX512F | CPU_FEATURE_AVX512CD | CPU_FEATURE_AVX512ER | CPU_FEATURE_AVX512PF | CPU_FEATURE_AVX512DQ | CPU_FEATURE_AVX512BW |
+            CPU_FEATURE_AVX512VL | CPU_FEATURE_AVX512IFMA52 | CPU_FEATURE_AVX512VBMI | CPU_FEATURE_AVX512_VPOPCNTDQ | CPU_FEATURE_AVX512_4VNNIW |
+            CPU_FEATURE_AVX512_4FMAPS | CPU_FEATURE_AVX512_BITALG | CPU_FEATURE_AVX512_VBMI2 | CPU_FEATURE_AVX512_VNNI));
+    }
+
+    else if (!XFEATURE_ENABLED_AVX3(xfrm))
+    {
+        feature_bit_array &= (~(CPU_FEATURE_AVX512F | CPU_FEATURE_AVX512CD | CPU_FEATURE_AVX512ER | CPU_FEATURE_AVX512PF | CPU_FEATURE_AVX512DQ |
+            CPU_FEATURE_AVX512BW | CPU_FEATURE_AVX512VL | CPU_FEATURE_AVX512IFMA52 | CPU_FEATURE_AVX512VBMI | CPU_FEATURE_AVX512_VPOPCNTDQ |
+            CPU_FEATURE_AVX512_4VNNIW | CPU_FEATURE_AVX512_4FMAPS | CPU_FEATURE_AVX512_BITALG | CPU_FEATURE_AVX512_VBMI2 | CPU_FEATURE_AVX512_VNNI));
     }
 
     g_cpu_feature_indicator = feature_bit_array;
     return 0;
 }
 
-extern "C" int init_optimized_libs(const uint64_t feature_bit_array, uint64_t xfrm)
+extern "C" int init_optimized_libs(const uint64_t feature_bit_array, uint32_t *cpuinfo_table, uint64_t xfrm)
 {
-    if (g_enclave_state != ENCLAVE_INIT_IN_PROGRESS)
+    if (get_enclave_state() != ENCLAVE_INIT_IN_PROGRESS)
     {
         return -1;
     }
@@ -101,7 +112,7 @@ extern "C" int init_optimized_libs(const uint64_t feature_bit_array, uint64_t xf
     }
 
     // Init IPP crypto library with the global feature indicator	
-    if(sgx_init_crypto_lib(g_cpu_feature_indicator) != 0)
+    if(sgx_init_crypto_lib(g_cpu_feature_indicator, cpuinfo_table) != 0)
     {
         return -1;
     }

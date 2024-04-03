@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -46,11 +46,7 @@ extern "C" {
  *
  * @param p_pub_key The EC public key of the service provider based on the NIST
  *                  P-256 elliptic curve.
- * @param b_pse     If true, platform service information is needed in message
- *                  3. The caller should make sure a PSE session has been
- *                  established using sgx_create_pse_session before attempting
- *                  to establish a remote attestation and key exchange session
- *                  involving platform service information.
+ * @param b_pse     [DEPRECATED]
  * @param p_context The output context for the subsequent remote attestation
  *                  and key exchange process, to be used in sgx_ra_get_msg1 and
  *                  sgx_ra_proc_msg2.
@@ -109,11 +105,7 @@ typedef sgx_status_t(*sgx_ra_derive_secret_keys_t)(
  *
  * @param p_pub_key The EC public key of the service provider based on the NIST
  *                  P-256 elliptic curve.
- * @param b_pse     If true, platform service information is needed in message
- *                  3. The caller should make sure a PSE session has been
- *                  established using sgx_create_pse_session before attempting
- *                  to establish a remote attestation and key exchange session
- *                  involving platform service information.
+ * @param b_pse     [DEPRECATED]
  * @param derive_key_cb A pointer to a call back routine matching the
  *                      function prototype of sgx_ra_derive_secret_keys_t.  This
  *                      function takes the Diffie-Hellman shared secret as input
@@ -147,8 +139,7 @@ sgx_status_t SGXAPI sgx_ra_init_ex(
  * protocol message 3 produced by sgx_ra_proc_msg2.
  *
  * @param context   Context returned by sgx_ra_init.
- * @param type      The specifier of keys, can be SGX_RA_KEY_MK, SGX_RA_KEY_SK
- *                  and SGX_RA_VK.
+ * @param type      The specifier of keys, can be SGX_RA_KEY_MK, SGX_RA_KEY_SK.
  * @param p_key     The key returned.
  * @return sgx_status_t SGX_SUCCESS                     Indicates success.
  *                      SGX_ERROR_INVALID_PARAMETER     Indicates an error that

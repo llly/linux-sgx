@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -36,8 +36,13 @@
 #include "sgx.h"
 #include "sgx_defs.h"
 #include "sgx_ecp_types.h"
-#include "sgx_dh.h"
 #include "arch.h"
+
+// Disable SGX_USE_LAv2_INITIATOR to allow compiling both LAv1/2 APIs
+#ifdef  SGX_USE_LAv2_INITIATOR
+#undef  SGX_USE_LAv2_INITIATOR
+#endif
+#include "sgx_dh.h"
 
 #pragma pack(push, 1)
  

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -56,7 +56,7 @@ typedef struct _aes_gcm_data_t
 typedef struct _sealed_data_t
 {
     sgx_key_request_t  key_request;       /* 00: The key request used to obtain the sealing key */
-    uint32_t           plain_text_offset; /* 64: Offset within aes_data.playload to the start of the optional additional MAC text */
+    uint32_t           plain_text_offset; /* 64: Offset within aes_data.payload to the start of the optional additional MAC text */
     uint8_t            reserved[12];      /* 68: Reserved bits */
     sgx_aes_gcm_data_t aes_data;          /* 80: Data structure holding the AES/GCM related data */
 } sgx_sealed_data_t;

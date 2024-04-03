@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -46,7 +46,9 @@ endif
 LDLIBS += -ldl
 
 ifdef DEBUG
-    CFLAGS += -g -DSE_DEBUG=1
+    CFLAGS += -g -DSE_DEBUG=1 -ffunction-sections -fdata-sections
+else
+    CFLAGS += -O2 -D_FORTIFY_SOURCE=2 -ffunction-sections -fdata-sections
 endif
 
 OBJ1 := se_memory.o se_trace.o
@@ -59,7 +61,9 @@ GDB_PLUGINS_FILES := gdb-sgx-plugin/sgx_emmt.py         \
                      gdb-sgx-plugin/gdb_sgx_cmd         \
                      gdb-sgx-plugin/gdb_sgx_plugin.py   \
                      gdb-sgx-plugin/load_symbol_cmd.py  \
-                     gdb-sgx-plugin/readelf.py
+                     gdb-sgx-plugin/readelf.py          \
+                     gdb-sgx-plugin/sgx-gdb             \
+                     gdb-sgx-plugin/printers.py
 
 GDB_OUT_DIR := $(BUILD_DIR)/gdb-sgx-plugin
 TARGET      := libsgx_ptrace.so
@@ -74,7 +78,7 @@ install: $(TARGET) | $(GDB_OUT_DIR) $(GDB_PLUGINS_FILES)
 	$(CP) $(TARGET) $(BUILD_DIR)
 
 $(TARGET): $(OBJS)
-	$(CC) -shared -o $@ $^ $(LDLIBS) $(CFLAGS) -Wl,--gc-sections
+	$(CC) -shared -o $@ $^ $(LDLIBS) $(CFLAGS) $(COMMON_LDFLAGS) -Wl,--gc-sections
 
 $(OBJ1): %.o: $(COMMON_DIR)/src/%.c
 	$(CC) -c $(CFLAGS) $(CPPFLAGS) $< -o $@

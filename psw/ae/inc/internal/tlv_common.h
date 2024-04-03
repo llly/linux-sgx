@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -144,7 +144,9 @@ enum _se_protocol_response_status_t
     SE_PRS_PROVISIONING_ERROR,
     SE_PRS_INVALID_REQUEST,
     SE_PRS_PROV_ATTEST_KEY_NOT_FOUND,   
-    SE_PRS_INVALID_REPORT   
+    SE_PRS_INVALID_REPORT,
+    SE_PRS_PROV_ATTEST_KEY_REVOKED,
+    SE_PRS_PROV_ATTEST_KEY_TCB_OUT_OF_DATE
 };
 
 typedef uint16_t pse_protocol_response_status_t;

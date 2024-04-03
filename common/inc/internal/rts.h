@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,6 +35,8 @@
 #include "se_types.h"
 #include "rts_cmd.h"
 
+#pragma pack(push, 1)
+
 typedef struct _ocall_context_t
 {
     uintptr_t shadow0;
@@ -60,15 +62,64 @@ typedef struct _ocall_context_t
 typedef enum
 {
     SDK_VERSION_1_5,
-    SDK_VERSION_2_0
+    SDK_VERSION_2_0,
+    SDK_VERSION_2_1,
+    SDK_VERSION_2_2,
+    SDK_VERSION_2_3,
+    SDK_VERSION_3_0,
 } sdk_version_t;
 
-typedef struct _cpu_feature_sdk_version
+typedef struct _system_features
 {
     uint64_t cpu_features;
     sdk_version_t version;
-}cpu_sdk_info_t;
+    /* system feature set array. MSb of each element indicates whether this is
+     * the last element. This will help tRTS to know when it can stop walking
+     * through the array searching for certain features.
+    */
+    uint64_t system_feature_set[1];
+    uint32_t cpuinfo_table[8][4];
+    uint8_t* sealed_key;
+    uint64_t size;
+    uint64_t cpu_features_ext;
+    uint32_t cpu_core_num;
+}system_features_t;
 
-#define     OCALL_FLAG        0x4F434944
+// current system_feature_set only contains one element of type uint64_t, the highest
+// bit is bit 63
+#define SYS_FEATURE_MSb     63
+#define SYS_FEATURE_EXTEND  62
+
+// feature bit in system_feature_set:
+//   bit0 - EDMM
+//   bit1 - AEXNOTIFY
+#define EDMM_BIT        0
+#define AEXNOTIFY_BIT   1
+#define EDMM_ENABLE_BIT 0x1ULL
+
+
+#define OCALL_FLAG        0x4F434944
+
+#define BUILTIN_OCALL_1  -2
+#define BUILTIN_OCALL_2  -3
+#define BUILTIN_OCALL_3  -4
+#define BUILTIN_OCALL_4  -5
+#define BUILTIN_OCALL_5  -6
+#define BUILTIN_OCALL_6  -7
+
+typedef enum
+{
+    EDMM_TRIM = BUILTIN_OCALL_1,
+    EDMM_TRIM_COMMIT = BUILTIN_OCALL_2,
+    EDMM_MODPR = BUILTIN_OCALL_3,
+    EDMM_MPROTECT = BUILTIN_OCALL_4,
+    EDMM_ALLOC = BUILTIN_OCALL_5,
+    EDMM_MODIFY = BUILTIN_OCALL_6,
+}edmm_ocall_t;
+
+
+#define is_builtin_ocall(ocall_val) (((int)ocall_val >= BUILTIN_OCALL_6) && ((int)ocall_val <= BUILTIN_OCALL_1))
+
+#pragma pack(pop)
 
 #endif

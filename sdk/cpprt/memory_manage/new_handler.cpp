@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -53,7 +53,7 @@ namespace std{
     // Return Value
     //      new_handler - The value of the current new_handler function if this has been previously set by this function
     //									 NULL -if this is the first call to set_new_handler
-    new_handler set_new_handler(new_handler handle) throw()
+    new_handler set_new_handler(new_handler handle)
     {
         sgx_spin_lock(&handler_lock);
         new_handler retHandle = new_handl;
@@ -68,16 +68,14 @@ namespace std{
     }
 };
 
-using namespace std;
-
 //call new_handl function when  new memory failed
 int  call_newh()
 {
     int ret = 0;
-    sgx_spin_lock(&handler_lock);
-    new_handler handler = new_handl;
+    sgx_spin_lock(&std::handler_lock);
+    std::new_handler handler = std::new_handl;
     //unlock the handler here because new_handl may call set_new_handler again, will cause dead lock.
-    sgx_spin_unlock(&handler_lock);
+    sgx_spin_unlock(&std::handler_lock);
 
     // call new handler
     if ( handler != NULL ){

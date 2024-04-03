@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -30,6 +30,7 @@
  */
 
 #include "protected_fs_file.h"
+#include <tseal_migration_attr.h>
 
 #include <sgx_utils.h>
 #include <sgx_trts.h>
@@ -66,18 +67,18 @@ bool protected_fs_file::generate_secure_blob(sgx_aes_gcm_128bit_key_t* key, cons
 
 	// index
 	// SP800-108:
-	// i – A counter, a binary string of length r that is an input to each iteration of a PRF in counter mode [...].
+	// i - A counter, a binary string of length r that is an input to each iteration of a PRF in counter mode [...].
 	buf.index = 0x01;
 
 	// label
 	// SP800-108:
-	// Label – A string that identifies the purpose for the derived keying material, which is encoded as a binary string. 
+	// Label - A string that identifies the purpose for the derived keying material, which is encoded as a binary string. 
 	//         The encoding method for the Label is defined in a larger context, for example, in the protocol that uses a KDF.
 	strncpy(buf.label, label, len);
 
 	// context and nonce
 	// SP800-108: 
-	// Context – A binary string containing the information related to the derived keying material.
+	// Context - A binary string containing the information related to the derived keying material.
 	//           It may include identities of parties who are deriving and / or using the derived keying material and, 
 	//           optionally, a nonce known by the parties who derive the keys.
 	buf.node_number = physical_node_number;
@@ -112,18 +113,18 @@ bool protected_fs_file::generate_secure_blob_from_user_kdk(bool restore)
 
 	// index
 	// SP800-108:
-	// i – A counter, a binary string of length r that is an input to each iteration of a PRF in counter mode [...].
+	// i - A counter, a binary string of length r that is an input to each iteration of a PRF in counter mode [...].
 	buf.index = 0x01;
 
 	// label
 	// SP800-108:
-	// Label – A string that identifies the purpose for the derived keying material, which is encoded as a binary string. 
+	// Label - A string that identifies the purpose for the derived keying material, which is encoded as a binary string. 
 	//         The encoding method for the Label is defined in a larger context, for example, in the protocol that uses a KDF.
 	strncpy(buf.label, METADATA_KEY_NAME, strlen(METADATA_KEY_NAME));
 
 	// context and nonce
 	// SP800-108: 
-	// Context – A binary string containing the information related to the derived keying material.
+	// Context - A binary string containing the information related to the derived keying material.
 	//           It may include identities of parties who are deriving and / or using the derived keying material and, 
 	//           optionally, a nonce known by the parties who derive the keys.
 	buf.node_number = 0;
@@ -210,7 +211,7 @@ bool protected_fs_file::generate_random_meta_data_key()
 	memcpy(&key_request.cpu_svn, &report.body.cpu_svn, sizeof(sgx_cpu_svn_t));
 	memcpy(&key_request.isv_svn, &report.body.isv_svn, sizeof(sgx_isv_svn_t));
 
-    key_request.attribute_mask.flags = SGX_FLAGS_RESERVED | SGX_FLAGS_INITTED | SGX_FLAGS_DEBUG;
+    key_request.attribute_mask.flags = TSEAL_DEFAULT_FLAGSMASK;
     key_request.attribute_mask.xfrm = 0x0;
 
 	key_request.misc_mask = TSEAL_DEFAULT_MISCMASK;
@@ -264,7 +265,7 @@ bool protected_fs_file::restore_current_meta_data_key(const sgx_aes_gcm_128bit_k
 	key_request.key_name = SGX_KEYSELECT_SEAL;
 	key_request.key_policy = SGX_KEYPOLICY_MRSIGNER;
 
-	key_request.attribute_mask.flags = SGX_FLAGS_RESERVED | SGX_FLAGS_INITTED | SGX_FLAGS_DEBUG;
+	key_request.attribute_mask.flags = TSEAL_DEFAULT_FLAGSMASK;
     key_request.attribute_mask.xfrm = 0x0;
 
 	key_request.misc_mask = TSEAL_DEFAULT_MISCMASK;
@@ -282,5 +283,3 @@ bool protected_fs_file::restore_current_meta_data_key(const sgx_aes_gcm_128bit_k
 
 	return true;
 }
-
-

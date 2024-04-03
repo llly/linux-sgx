@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -70,6 +70,37 @@ typedef struct _thread_data_t *pTD;
         QUEUE_NEXT((head)->m_first)) == SGX_THREAD_T_NULL)  \
     (head)->m_last = SGX_THREAD_T_NULL;                     \
 } while (0)
+
+#define QUEUE_REMOVE(var, elm) do                         \
+{                                                         \
+    sgx_thread_t tmpThread = (var)->m_first;              \
+    if ((var)->m_first == SGX_THREAD_T_NULL )             \
+    {                                                     \
+        break;                                            \
+    }                                                     \
+    else if ((var)->m_first == (elm) )                    \
+    {                                                     \
+        QUEUE_REMOVE_HEAD((var));                         \
+    }                                                     \
+    else                                                  \
+    {                                                     \
+        while ( ((pTD)tmpThread)->m_next != NULL )        \
+        {                                                 \
+            if ( ((pTD)tmpThread)->m_next == (pTD)(elm) ) \
+            {                                             \
+                ((pTD)tmpThread)->m_next = (((pTD)tmpThread)->m_next)->m_next;      \
+                ((pTD)(elm))->m_next = NULL;              \
+                if ( (var)->m_last == (sgx_thread_t)(elm) )             \
+                {                                         \
+                    (var)->m_last =  (sgx_thread_t)tmpThread;       \
+                }                                         \
+                break;                                    \
+            }                                             \
+	        tmpThread = (sgx_thread_t)((pTD)tmpThread)->m_next; \
+        }                                                 \
+    }                                                     \
+} while(0)
+
 
 #define QUEUE_COUNT_ALL(var, head, total) do {      \
     QUEUE_FOREACH(var, head)                        \

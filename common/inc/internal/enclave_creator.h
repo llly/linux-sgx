@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -49,17 +49,21 @@
 #include "uncopyable.h"
 #include <string.h>
 #include "file.h"
+#include "isgx_user.h"
+
 
 // this is the interface to both hardware, simulation and signing mode
 class EnclaveCreator : private Uncopyable
 {
 public:
     /*
-    @quote      the EPC reserved;
-    @enclave_id identify the unique enclave;
-    @start_addr is the linear address allocated for Enclave;
+    @secs          is a pointer to the architecture-specific information to use to create the enclave;
+    @enclave_id    identify the unique enclave;
+    @start_addr    is the linear address allocated for enclave;
+    @ex_features   is the bitmask defining the extended features to activate on the enclave creation;
+    @ex_features_p is the array of pointers to extended feature control structures;
     */
-    virtual int create_enclave(secs_t *secs, sgx_enclave_id_t *enclave_id, void **start_addr, bool ae = false) = 0;
+    virtual int create_enclave(secs_t *secs, sgx_enclave_id_t *enclave_id, void **start_addr, const uint32_t ex_features, const void* ex_features_p[32]) = 0;
     /*
     *@attr can be REMOVABLE
     */
@@ -68,12 +72,15 @@ public:
     virtual int destroy_enclave(sgx_enclave_id_t enclave_id, uint64_t enclave_size = 0) = 0;
     virtual int initialize(sgx_enclave_id_t enclave_id) = 0;
     virtual bool use_se_hw() const = 0;
+    virtual bool is_EDMM_supported(sgx_enclave_id_t enclave_id) = 0;
+    virtual bool is_driver_compatible() = 0;
 
     virtual int get_misc_attr(sgx_misc_attribute_t *sgx_misc_attr, metadata_t *metadata, SGXLaunchToken * const lc, uint32_t flag) = 0;
     virtual bool get_plat_cap(sgx_misc_attribute_t *se_attr) = 0;
 #ifdef SE_1P5_VERTICAL
     virtual uint32_t handle_page_fault(uint64_t pf_address) { UNUSED(pf_address); return (uint32_t)SGX_ERROR_UNEXPECTED; }
 #endif
+    
     // destructor
     virtual ~EnclaveCreator() {};
 };

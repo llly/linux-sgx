@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -41,15 +41,31 @@
 
 #include "se_types.h"
 #include "thread_data.h"
+#include "metadata.h"
+#include "rts.h"
 
+#define LAYOUT_ENTRY_NUM 43
 typedef struct _global_data_t
 {
-    sys_word_t     enclave_size;
+    sys_word_t     sdk_version;
+    sys_word_t     enclave_size;            /* the size of the virtual address range that the enclave will use*/
     sys_word_t     heap_offset;
     sys_word_t     heap_size;
-    uint32_t       thread_policy;
-    uint32_t       reserved;
+    sys_word_t     rsrv_offset;
+    sys_word_t     rsrv_size;
+    sys_word_t     rsrv_executable;
+    sys_word_t     thread_policy;
+    sys_word_t     tcs_max_num;
+    sys_word_t     tcs_num;
     thread_data_t  td_template;
+    uint8_t        tcs_template[TCS_TEMPLATE_SIZE];
+    uint32_t       layout_entry_num;
+    uint32_t       reserved;
+    layout_t       layout_table[LAYOUT_ENTRY_NUM];
+    uint64_t       enclave_image_address;   /* the base address of the enclave image */
+    uint64_t       elrange_start_address;   /* the base address provided in the enclave's SECS (SECS.BASEADDR) */
+    uint64_t       elrange_size;            /* the size of the enclave address range provided in the enclave's SECS (SECS.SIZE) */
+    sys_word_t     edmm_bk_overhead;        /* memory overhead used by edmm bookkeeping */
 } global_data_t;
 
 #define ENCLAVE_INIT_NOT_STARTED  0
@@ -57,12 +73,17 @@ typedef struct _global_data_t
 #define ENCLAVE_INIT_DONE         2
 #define ENCLAVE_CRASHED           3
 
+#define RELRO_SECTION_NAME ".data.rel.ro"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 extern SE_DECLSPEC_EXPORT global_data_t const volatile g_global_data;
-extern uint32_t g_enclave_state;
+extern sdk_version_t g_sdk_version;
+extern int EDMM_supported;
 extern uint8_t  __ImageBase;
+extern int g_xsave_enabled;
+
 
 #ifdef __cplusplus
 }

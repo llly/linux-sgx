@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,7 +29,6 @@
  *
  */
 #ifdef HAVE_SGX
-
 #include "global_data.h"
 #include <string.h>
 
@@ -38,6 +37,7 @@
 #endif
 #include <link.h>
 
+extern void *get_enclave_base(void);
 /**
  * This function is commonly provided by glibc for application to walk
  * through list of shared objects.  It is needed inside Enclave so that
@@ -52,7 +52,7 @@ int dl_iterate_phdr(
     ElfW(Ehdr)         *ehdr;
 
     memset(&info, 0, sizeof(info));
-    ehdr = (ElfW(Ehdr) *) &__ImageBase;
+    ehdr = (ElfW(Ehdr) *) get_enclave_base();
 
     info.dlpi_addr   = (ElfW(Addr)) ehdr;
     info.dlpi_name  = "";

@@ -1,13 +1,24 @@
 /*
-  This is a version (aka dlmalloc) of malloc/free/realloc written by
-  Doug Lea and released to the public domain, as explained at
-  http://creativecommons.org/publicdomain/zero/1.0/ Send questions,
-  comments, complaints, performance data, etc to dl@cs.oswego.edu
+Copyright 2023 Doug Lea
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 * Version 2.8.6 Wed Aug 29 06:57:58 2012  Doug Lea
-   Note: There may be an updated version of this malloc obtainable at
-           ftp://gee.cs.oswego.edu/pub/misc/malloc.c
-         Check before installing!
+  Re-licensed 25 Sep 2023 with MIT-0 replacing obsolete CC0
+  See https://opensource.org/license/mit-0/
 
 * Quickstart
 
@@ -538,7 +549,7 @@ MAX_RELEASE_CHECK_RATE   default: 4095 unless not HAVE_MMAP
 #define HAVE_MREMAP 0
 #define HAVE_MORECORE 1
 #define MMAP_CLEARS 0
-#define MALLOC_ALIGNMENT ((size_t)8U)
+#define MALLOC_ALIGNMENT ((size_t)16U)
 #define LACKS_TIME_H
 #define LACKS_SYS_PARAM_H
 #define LACKS_SYS_MMAN_H
@@ -837,16 +848,16 @@ extern "C" {
 #if !ONLY_MSPACES
 
 /* ------------------- Declarations of public routines ------------------- */
-
 #ifndef USE_DL_PREFIX
-#define dlcalloc               calloc
-#define dlfree                 free
-#define dlmalloc               malloc
-#define dlmemalign             memalign
-#define dlrealloc              realloc
-#define dlmallinfo             mallinfo
+  #define ALIAS(tc_fn)   __attribute__ ((alias (#tc_fn), used))
+  void* __attribute__((weak)) malloc(size_t size)               ALIAS(dlmalloc);
+  void __attribute__((weak)) free(void* ptr)                     ALIAS(dlfree);
+  void* __attribute__((weak)) realloc(void* ptr, size_t size)    ALIAS(dlrealloc);
+  void* __attribute__((weak)) calloc(size_t n, size_t size)      ALIAS(dlcalloc);
+  void* __attribute__((weak)) memalign(size_t align, size_t s)  ALIAS(dlmemalign); 
+  struct mallinfo __attribute__((weak)) mallinfo(void)         ALIAS(dlmallinfo);
+  int __attribute__((weak)) posix_memalign(void** pp, size_t alignment, size_t n) ALIAS(dlposix_memalign);
 #ifdef USE_MALLOC_DEPRECATED
-#define dlposix_memalign       posix_memalign
 #define dlrealloc_in_place     realloc_in_place
 #define dlvalloc               valloc
 #define dlpvalloc              pvalloc
@@ -952,7 +963,6 @@ DLMALLOC_EXPORT void* dlrealloc_in_place(void*, size_t);
 */
 DLMALLOC_EXPORT void* dlmemalign(size_t, size_t);
 
-#ifdef USE_MALLOC_DEPRECATED
 /*
   int posix_memalign(void** pp, size_t alignment, size_t n);
   Allocates a chunk of n bytes, aligned in accord with the alignment
@@ -963,6 +973,7 @@ DLMALLOC_EXPORT void* dlmemalign(size_t, size_t);
 */
 DLMALLOC_EXPORT int dlposix_memalign(void**, size_t, size_t);
 
+#ifdef USE_MALLOC_DEPRECATED
 /*
   valloc(size_t n);
   Equivalent to memalign(pagesize, n), where pagesize is the page
@@ -5335,7 +5346,6 @@ void* dlmemalign(size_t alignment, size_t bytes) {
   return internal_memalign(gm, alignment, bytes);
 }
 
-#ifdef USE_MALLOC_DEPRECATED
 int dlposix_memalign(void** pp, size_t alignment, size_t bytes) {
   void* mem = 0;
   if (alignment == MALLOC_ALIGNMENT)
@@ -5359,6 +5369,7 @@ int dlposix_memalign(void** pp, size_t alignment, size_t bytes) {
   }
 }
 
+#ifdef USE_MALLOC_DEPRECATED
 void* dlvalloc(size_t bytes) {
   size_t pagesz;
   ensure_initialization();

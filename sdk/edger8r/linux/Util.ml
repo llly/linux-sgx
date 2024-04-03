@@ -1,5 +1,5 @@
 (*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -114,7 +114,7 @@ let rec parse_cmdline (progname: string) (cmdargs: string list) =
     match args with
         [] -> ()
       | op :: ops ->
-          match String.lowercase op with
+          match String.lowercase_ascii op with
               "--use-prefix" -> use_pref := true; local_parser ops
             | "--header-only"-> hd_only := true; local_parser ops
             | "--untrusted"  -> untrusted := true; local_parser ops
@@ -189,14 +189,6 @@ let isdigit = function '0' | '1' .. '9' -> true | _ -> false
 let isalpha = function 'a' .. 'z' | 'A' .. 'Z' -> true | _ -> false
 let isalnum c = isdigit c || isalpha c
 
-let str_map f s =
-  let len = String.length s in
-  let res = String.create len in
-    for i = 0 to len - 1 do
-      String.set res i (f (String.get s i))
-    done;
-  res
-
 let str_to_list s =
   let rec iter i lst =
     if i < 0 then lst else iter (i - 1) (s.[i] :: lst)
@@ -223,7 +215,7 @@ let to_c_identifier (s: string) =
   let rest_str =
     String.sub s 1 (String.length s - 1)
   in
-    Char.escaped first_ch ^ str_map convert_char rest_str
+    Char.escaped first_ch ^ String.map convert_char rest_str
 
 
 (* Check whether given string is a valid C identifier.

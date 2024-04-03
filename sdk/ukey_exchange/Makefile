@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -32,22 +32,23 @@
 TOP_DIR  = ../..
 include $(TOP_DIR)/buildenv.mk
 
-CFLAGS   += -Werror
-CXXFLAGS += -Werror
+CFLAGS   += -Werror $(CET_FLAGS)
+CXXFLAGS += -Werror $(CET_FLAGS)
 
 INCLUDE += -I$(COMMON_DIR)/inc/internal \
-           -I$(COMMON_DIR)/inc
+           -I$(COMMON_DIR)/inc 
 
-INCLUDE += -I$(SGX_IPP_INC) 
+INCLUDE += -I$(SGX_IPP_INC)
 
 vpath %.cpp $(COMMON_DIR)/src
 
 vpath %.c $(TOP_DIR)/common/src
 
-CXXFLAGS += -fPIC -fno-rtti $(INCLUDE)
-CFLAGS += -fPIC $(INCLUDE)
+KE_DEFINITIONS = 
+CXXFLAGS += -fPIC -fno-exceptions -fno-rtti $(KE_DEFINITIONS) $(INCLUDE)
+CFLAGS += -fPIC $(KE_DEFINITIONS) $(INCLUDE)
 
-OBJ := ukey_exchange.o se_thread.o ukey_exchange_version.o 
+OBJ := ukey_exchange.o se_thread.o ukey_exchange_version.o
 
 LIBNAME := libsgx_ukey_exchange.a
 

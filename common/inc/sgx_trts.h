@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -35,6 +35,7 @@
 #include "sgx_error.h"
 #include "stddef.h"
 #include "sgx_defs.h"
+#include "stdint.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,6 +64,14 @@ int SGXAPI sgx_is_within_enclave(const void *addr, size_t size);
 int SGXAPI sgx_is_outside_enclave(const void *addr, size_t size);
 
 
+/* sgx_is_enclave_crashed()
+ * Return Value:
+ *      1 - the enclave state is crashed.
+ *      0 - the enclave state is not crashed.
+ */
+int SGXAPI sgx_is_enclave_crashed(void) __attribute__((section(".nipx")));
+
+
 /* sgx_read_rand()
  * Parameters:
  *      rand - the buffer to receive the random number
@@ -73,6 +82,24 @@ int SGXAPI sgx_is_outside_enclave(const void *addr, size_t size);
  *      SGX_ERROR_UNEXPECTED - HW failure of RDRAND instruction
 */
 sgx_status_t SGXAPI sgx_read_rand(unsigned char *rand, size_t length_in_bytes);
+
+/* sgx_rdpkru()
+ * Parameters:
+ *      val - the output PRKU
+ * Return Value:
+ *      1 - read successfully
+ *      0 - failed to read
+ */
+int SGXAPI sgx_rdpkru(uint32_t *val);
+
+/* sgx_wrpkru()
+ * Parameters:
+ *      val - the target value to be written into PKRU
+ * Return Value:
+ *      1 - write successfully
+ *      0 - failed to write
+ */
+int SGXAPI sgx_wrpkru(uint32_t val);
 
 #ifdef __cplusplus
 }

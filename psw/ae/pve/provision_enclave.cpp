@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -37,6 +37,7 @@
   * Definition for interfaces provided by provision enclave.
   */
 
+#include <sgx_random_buffers.h>
 #include "se_cdefs.h"
 #include "string.h"
 #include "helper.h"
@@ -45,6 +46,7 @@
 #include "provision_msg.h"
 #include "provision_enclave_t.c"
 #include "sgx_utils.h"
+#include "sgx_lfence.h"
 #include "aeerror.h"
 
 ae_error_t pve_error_2_ae_error(pve_status_t pve_error)
@@ -137,6 +139,12 @@ uint32_t proc_prov_msg2_data_wrapper(
         goto ret_point;
     }
 
+    //
+    // for user_check SigRL input
+    // based on sigrl_size input parameter
+    //
+    sgx_lfence();
+
     if((sigrl==NULL&&sigrl_size!=0)||
         (sigrl!=NULL&&sigrl_size==0)){
         status = PVEC_PARAMETER_ERROR;
@@ -188,7 +196,7 @@ uint32_t proc_prov_msg4_data_wrapper(
         goto ret_point;
     }
 
-    status = proc_prov_msg4_data( msg4_input, reinterpret_cast<sgx_sealed_data_t*>(data_blob));
+    status = random_stack_advance(proc_prov_msg4_data, msg4_input, reinterpret_cast<sgx_sealed_data_t*>(data_blob));
 
 ret_point:
     return pve_error_2_ae_error(status);

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -47,8 +47,8 @@ rm -fr ${INSTALL_PATH}
 # Get the architecture of the build from generated binary
 get_arch()
 {
-    local a=$(readelf -h $BUILD_DIR/sgx_sign | sed -n '2p' | awk '/:/{print $6}')
-    test $a = 02 && echo 'x64' || echo 'x86'
+    local a=$(readelf -h $BUILD_DIR/sgx_sign | sed -n '2p' | awk '{print $6}')
+    test $a = 01 && echo 'x86' || echo 'x64'
 }
 
 ARCH=$(get_arch)
@@ -85,6 +85,10 @@ cp ${LINUX_INSTALLER_COMMON_DIR}/gen_source/gen_source.py ${SCRIPT_DIR}
 # Copy the files according to the BOM
 python ${SCRIPT_DIR}/gen_source.py --bom=BOMs/sdk_base.txt
 python ${SCRIPT_DIR}/gen_source.py --bom=BOMs/sdk_${ARCH}.txt --cleanup=false
+if [ "$1" = "cve-2020-0551" ]; then 
+    python ${SCRIPT_DIR}/gen_source.py --bom=BOMs/sdk_cve_2020_0551_load.txt --cleanup=false
+    python ${SCRIPT_DIR}/gen_source.py --bom=BOMs/sdk_cve_2020_0551_cf.txt --cleanup=false
+fi
 python ${SCRIPT_DIR}/gen_source.py --bom=../licenses/BOM_license.txt --cleanup=false
 
 # Create the tarball

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -42,11 +42,12 @@
 #include <AEGetLaunchTokenRequest.h>
 #include <AEGetLaunchTokenResponse.h>
 
-#include <AEGetPsCapRequest.h>
-#include <AEGetPsCapResponse.h>
 
 #include <AEReportAttestationRequest.h>
 #include <AEReportAttestationResponse.h>
+
+#include <AECheckUpdateStatusRequest.h>
+#include <AECheckUpdateStatusResponse.h>
 
 #include <AEGetWhiteListSizeRequest.h>
 #include <AEGetWhiteListSizeResponse.h>
@@ -59,11 +60,36 @@
 
 #include <AESGXSwitchExtendedEpidGroupRequest.h>
 #include <AESGXSwitchExtendedEpidGroupResponse.h>
+
+#include <AESGXRegisterRequest.h>
+#include <AESGXRegisterResponse.h>
+
+#include <AEInitQuoteExRequest.h>
+#include <AEInitQuoteExResponse.h>
+
+#include <AEGetQuoteSizeExRequest.h>
+#include <AEGetQuoteSizeExResponse.h>
+
+#include <AEGetQuoteExRequest.h>
+#include <AEGetQuoteExResponse.h>
+
+#include <AESelectAttKeyIDRequest.h>
+#include <AESelectAttKeyIDResponse.h>
+
+#include <AEGetSupportedAttKeyIDNumRequest.h>
+#include <AEGetSupportedAttKeyIDNumResponse.h>
+
+#include <AEGetSupportedAttKeyIDsRequest.h>
+#include <AEGetSupportedAttKeyIDsResponse.h>
+
 ////////THE COMMON STUFF aka INTEGRATION with Linux API
 #include <sgx_report.h>
 #include <arch.h>
 #include <sgx_urts.h>
-#include <sgx_uae_service.h>
+#include <sgx_uae_launch.h>
+#include <sgx_uae_epid.h>
+#include <sgx_uae_quote_ex.h>
+
 
 #include <oal/uae_oal_api.h>
 #include <aesm_error.h>
@@ -82,7 +108,7 @@
 
 ///////////////////////////////////////////////////////
 
-// NOTE -> uAE works internally with milliseconds and cannot obtain a better resolution for timeout because 
+// NOTE -> uAE works internally with milliseconds and cannot obtain a better resolution for timeout because
 // epoll_wait will get the timeout parameter in milliseconds
 
 extern "C"
@@ -150,8 +176,8 @@ uae_oal_status_t SGXAPI oal_get_quote(
     uint32_t sig_rl_size,
     sgx_report_t *p_qe_report,
     sgx_quote_t *p_quote,
-    uint32_t quote_size, 
-    uint32_t timeout_usec, 
+    uint32_t quote_size,
+    uint32_t timeout_usec,
     aesm_error_t *result)
 {
     TRY_CATCH_BAD_ALLOC({
@@ -179,41 +205,19 @@ uae_oal_status_t SGXAPI oal_get_quote(
 }
 
 
-extern "C"
-uae_oal_status_t SGXAPI oal_get_ps_cap(uint64_t* ps_cap, uint32_t timeout_usec, aesm_error_t *result)
-{
-    TRY_CATCH_BAD_ALLOC({
-        AEServices* servicesProvider = AEServicesProvider::GetServicesProvider();
-        if (servicesProvider == NULL)
-            return UAE_OAL_ERROR_UNEXPECTED;
-
-        AEGetPsCapRequest getPsCapRequest(timeout_usec/1000);
-
-        AEGetPsCapResponse getPsCapResponse;
-        uae_oal_status_t ret = servicesProvider->InternalInterface(&getPsCapRequest, &getPsCapResponse, timeout_usec / 1000);
-        if (ret == UAE_OAL_SUCCESS)
-        {
-            bool valid = getPsCapResponse.GetValues((uint32_t*)result, ps_cap);
-            if (!valid)
-                ret = UAE_OAL_ERROR_UNEXPECTED;
-        }
-        return ret;
-    });
-
-}
 
 extern "C"
 uae_oal_status_t SGXAPI oal_report_attestation_status(
     const sgx_platform_info_t* platform_info,
     int attestation_error_code,
     sgx_update_info_bit_t* platform_update_info,
-    uint32_t timeout_usec, 
+    uint32_t timeout_usec,
     aesm_error_t *result)
 {
     TRY_CATCH_BAD_ALLOC({
         AEServices* servicesProvider = AEServicesProvider::GetServicesProvider();
         if (servicesProvider == NULL)
-            return UAE_OAL_ERROR_UNEXPECTED; 
+            return UAE_OAL_ERROR_UNEXPECTED;
 
         AEReportAttestationRequest reportAttestationRequest(sizeof(sgx_platform_info_t), (const uint8_t*)platform_info, (uint32_t)attestation_error_code, sizeof(sgx_update_info_bit_t), timeout_usec / 1000);
 
@@ -222,6 +226,39 @@ uae_oal_status_t SGXAPI oal_report_attestation_status(
         if (ret == UAE_OAL_SUCCESS)
         {
             bool valid = reportAttestationResponse.GetValues((uint32_t*)result, sizeof(sgx_update_info_bit_t), (uint8_t*)platform_update_info);
+            if (!valid)
+                ret = UAE_OAL_ERROR_UNEXPECTED;
+        }
+        return ret;
+    });
+}
+
+extern "C"
+uae_oal_status_t SGXAPI oal_check_update_status(
+    const sgx_platform_info_t* platform_info,
+    sgx_update_info_bit_t* platform_update_info,
+    uint32_t config,
+    uint32_t* status,
+    uint32_t timeout_usec,
+    aesm_error_t *result)
+{
+    TRY_CATCH_BAD_ALLOC({
+        AEServices* servicesProvider = AEServicesProvider::GetServicesProvider();
+        if (servicesProvider == NULL)
+            return UAE_OAL_ERROR_UNEXPECTED;
+
+        uint32_t platform_info_size = platform_info ? (uint32_t)(sizeof(sgx_platform_info_t)) : 0;
+        uint32_t update_info_size = platform_update_info ? (uint32_t)(sizeof(sgx_update_info_bit_t)) : 0;
+
+        AECheckUpdateStatusRequest checkUpdateStatusRequest(platform_info_size, (const uint8_t*)platform_info,
+          update_info_size, (uint32_t)config, timeout_usec / 1000);
+
+        AECheckUpdateStatusResponse checkUpdateStatusResponse;
+        uae_oal_status_t ret = servicesProvider->InternalInterface(&checkUpdateStatusRequest, &checkUpdateStatusResponse, timeout_usec / 1000);
+        if (ret == UAE_OAL_SUCCESS)
+        {
+            bool valid = checkUpdateStatusResponse.GetValues((uint32_t*)result, update_info_size, (uint8_t*)platform_update_info,
+              status);
             if (!valid)
                 ret = UAE_OAL_ERROR_UNEXPECTED;
         }
@@ -317,4 +354,179 @@ uae_oal_status_t oal_switch_extended_epid_group(uint32_t x_group_id, uint32_t ti
     });
 }
 
+extern "C"
+uae_oal_status_t oal_register_common(uint8_t* buf, uint32_t buf_size, uint32_t data_type, uint32_t timeout_usec, aesm_error_t *result)
+{
+    TRY_CATCH_BAD_ALLOC({
+        AEServices* servicesProvider = AEServicesProvider::GetServicesProvider();
+        if (servicesProvider == NULL)
+            return UAE_OAL_ERROR_UNEXPECTED;
+
+        AESGXRegisterRequest sgxRegisterRequest(buf_size, buf, data_type, timeout_usec / 1000);
+
+        AESGXRegisterResponse sgxRegisterResponse;
+        uae_oal_status_t ret = servicesProvider->InternalInterface(&sgxRegisterRequest, &sgxRegisterResponse, timeout_usec / 1000);
+        if (ret == UAE_OAL_SUCCESS)
+        {
+            bool valid = sgxRegisterResponse.GetValues((uint32_t*)result);
+            if (!valid)
+                ret = UAE_OAL_ERROR_UNEXPECTED;
+        }
+        return ret;
+    });
+}
+
+extern "C"
+uae_oal_status_t oal_select_att_key_id(const uint8_t *att_key_id_list,
+                                       uint32_t att_key_id_list_size,
+                                       sgx_att_key_id_t *selected_att_key,
+                                       uint32_t timeout_usec, aesm_error_t *result)
+{
+    TRY_CATCH_BAD_ALLOC({
+        AEServices *servicesProvider = AEServicesProvider::GetServicesProvider();
+        if (servicesProvider == NULL)
+            return UAE_OAL_ERROR_UNEXPECTED;
+
+        AESelectAttKeyIDRequest selectAttKeyIDRequest(att_key_id_list_size, att_key_id_list, timeout_usec / 1000);
+        AESelectAttKeyIDResponse selectAttKeyIDResponse;
+        uae_oal_status_t ret  = servicesProvider->InternalInterface(&selectAttKeyIDRequest, &selectAttKeyIDResponse, timeout_usec / 1000);
+        if (ret == UAE_OAL_SUCCESS)
+        {
+            bool valid = selectAttKeyIDResponse.GetValues((uint32_t*)result, sizeof(sgx_att_key_id_t), (uint8_t*)selected_att_key);
+            if (!valid)
+                ret = UAE_OAL_ERROR_UNEXPECTED;
+        }
+        return ret;
+    });
+}
+
+extern "C"
+uae_oal_status_t oal_init_quote_ex(const sgx_att_key_id_t *att_key_id,
+                sgx_target_info_t *target_info,
+		        size_t *pub_key_id_size, size_t buf_size, uint8_t *pub_key_id,
+                uint32_t timeout_usec, aesm_error_t *result)
+{
+    TRY_CATCH_BAD_ALLOC({
+        AEServices *servicesProvider = AEServicesProvider::GetServicesProvider();
+        if (servicesProvider == NULL)
+            return UAE_OAL_ERROR_UNEXPECTED;
+
+        AEInitQuoteExRequest initQuoteExRequest(sizeof(sgx_att_key_id_t), (uint8_t*)att_key_id, (pub_key_id != NULL), buf_size, timeout_usec / 1000);
+        AEInitQuoteExResponse initQuoteExResponse;
+        uae_oal_status_t ret  = servicesProvider->InternalInterface(&initQuoteExRequest, &initQuoteExResponse, timeout_usec / 1000);
+        if (ret == UAE_OAL_SUCCESS)
+        {
+            bool valid = initQuoteExResponse.GetValues((uint32_t*)result, sizeof(sgx_target_info_t), (uint8_t*)target_info, (uint64_t*)pub_key_id_size, buf_size, pub_key_id);
+            if (!valid)
+                ret = UAE_OAL_ERROR_UNEXPECTED;
+        }
+        return ret;
+    });
+
+}
+
+
+extern "C"
+uae_oal_status_t oal_get_quote_size_ex(
+                const sgx_att_key_id_t *att_key_id,
+                uint32_t *quote_size,
+                uint32_t timeout_usec, aesm_error_t *result)
+{
+    TRY_CATCH_BAD_ALLOC({
+        AEServices* servicesProvider = AEServicesProvider::GetServicesProvider();
+        if (servicesProvider == NULL)
+            return UAE_OAL_ERROR_UNEXPECTED;
+
+        AEGetQuoteSizeExRequest getQuoteSizeExRequest(sizeof(sgx_att_key_id_t), (uint8_t*)att_key_id, timeout_usec / 1000);
+
+        AEGetQuoteSizeExResponse getQuoteSizeExResponse;
+        uae_oal_status_t ret = servicesProvider->InternalInterface(&getQuoteSizeExRequest, &getQuoteSizeExResponse, timeout_usec / 1000);
+        if (ret == UAE_OAL_SUCCESS)
+        {
+            bool valid = getQuoteSizeExResponse.GetValues((uint32_t*)result, quote_size);
+            if (!valid)
+                ret = UAE_OAL_ERROR_UNEXPECTED;
+        }
+        return ret;
+    });
+}
+
+extern "C"
+uae_oal_status_t SGXAPI oal_get_quote_ex(
+                const sgx_report_t *p_report,
+                const sgx_att_key_id_t *att_key_id,
+                sgx_qe_report_info_t *qe_report_info,
+                uint32_t quote_size, uint8_t *p_quote,
+    uint32_t timeout_usec,
+    aesm_error_t *result)
+{
+    TRY_CATCH_BAD_ALLOC({
+        AEServices *servicesProvider = AEServicesProvider::GetServicesProvider();
+        if (servicesProvider == NULL)
+            return UAE_OAL_ERROR_UNEXPECTED;
+        AEGetQuoteExRequest getQuoteExRequest(sizeof(sgx_report_t), (const uint8_t*)p_report,
+            sizeof(sgx_att_key_id_t), (uint8_t*)att_key_id,
+            sizeof(sgx_qe_report_info_t), (uint8_t *)qe_report_info,
+            quote_size,
+            timeout_usec / 1000);
+        AEGetQuoteExResponse getQuoteExResponse;
+        uae_oal_status_t ret = servicesProvider->InternalInterface(&getQuoteExRequest, &getQuoteExResponse, timeout_usec / 1000);
+        if (ret == UAE_OAL_SUCCESS)
+        {
+            bool valid = getQuoteExResponse.GetValues((uint32_t*)result, quote_size, (uint8_t*)p_quote, sizeof(sgx_qe_report_info_t), (uint8_t *)qe_report_info);
+            if (!valid)
+                ret = UAE_OAL_ERROR_UNEXPECTED;
+        }
+        return ret;
+    });
+}
+
+extern "C"
+uae_oal_status_t oal_get_supported_att_key_id_num(
+        uint32_t *p_att_key_id_num,
+        uint32_t timeout_usec, aesm_error_t *result)
+{
+    TRY_CATCH_BAD_ALLOC({
+        AEServices* servicesProvider = AEServicesProvider::GetServicesProvider();
+        if (servicesProvider == NULL)
+            return UAE_OAL_ERROR_UNEXPECTED;
+
+        AEGetSupportedAttKeyIDNumRequest getSupportedAttKeyIDNumRequest(timeout_usec / 1000);
+
+        AEGetSupportedAttKeyIDNumResponse getSupportedAttKeyIDNumResponse;
+        uae_oal_status_t ret = servicesProvider->InternalInterface(&getSupportedAttKeyIDNumRequest, &getSupportedAttKeyIDNumResponse, timeout_usec / 1000);
+        if (ret == UAE_OAL_SUCCESS)
+        {
+            bool valid = getSupportedAttKeyIDNumResponse.GetValues((uint32_t*)result, p_att_key_id_num);
+            if (!valid)
+                ret = UAE_OAL_ERROR_UNEXPECTED;
+        }
+        return ret;
+    });
+}
+
+extern "C"
+uae_oal_status_t oal_get_supported_att_key_ids(
+        sgx_att_key_id_ext_t *p_att_key_id_list,
+        uint32_t             att_key_id_list_size,
+        uint32_t timeout_usec, aesm_error_t *result)
+{
+    TRY_CATCH_BAD_ALLOC({
+        AEServices* servicesProvider = AEServicesProvider::GetServicesProvider();
+        if (servicesProvider == NULL)
+            return UAE_OAL_ERROR_UNEXPECTED;
+
+        AEGetSupportedAttKeyIDsRequest getSupportedAttKeyIDsRequest(att_key_id_list_size, timeout_usec / 1000);
+
+        AEGetSupportedAttKeyIDsResponse getSupportedAttKeyIDsResponse;
+        uae_oal_status_t ret = servicesProvider->InternalInterface(&getSupportedAttKeyIDsRequest, &getSupportedAttKeyIDsResponse, timeout_usec / 1000);
+        if (ret == UAE_OAL_SUCCESS)
+        {
+            bool valid = getSupportedAttKeyIDsResponse.GetValues((uint32_t*)result, att_key_id_list_size, (uint8_t*)p_att_key_id_list);
+            if (!valid)
+                ret = UAE_OAL_ERROR_UNEXPECTED;
+        }
+        return ret;
+    });
+}
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -273,6 +273,10 @@ typedef enum _ae_error_t{
     PSE_OP_ERROR_KDF_MISMATCH                =212,
 
     LE_WHITE_LIST_ALREADY_UPDATED            =213,
+
+    PCE_CRYPTO_ERROR                         =215,
+
+    PVE_PROV_ATTEST_KEY_TCB_OUT_OF_DATE      =216,
 } ae_error_t;
 
 #define AE_FAILED(x)    (AE_SUCCESS != (x))

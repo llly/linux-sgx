@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -28,13 +28,24 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  */
-
-
+#include <sgx_secure_align.h>
+#include <sgx_random_buffers.h>
 #include "provision_msg.h"
 #include <sgx_trts.h>
 #include "protocol.h"
 #include "cipher.h"
 #include "sgx_tcrypto.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
+#include "epid/member/software_member.h"
+#include "epid/member/src/write_precomp.h"
+#include "epid/member/src/signbasic.h"
+#include "epid/member/src/nrprove.h"
+#include "epid/member/src/validatekey.h"
+#ifdef __cplusplus
+}
+#endif
 #include "epid/common/errors.h"
 #include "epid/member/api.h"
 #include "pve_hardcoded_tlv_data.h"
@@ -64,8 +75,10 @@ static pve_status_t proc_prov_msg4_membercredential(const membership_credential_
 {
     pve_status_t ret = PVEC_SUCCESS;
     sgx_status_t sgx_status = SGX_SUCCESS;
-    sgx_key_128bit_t psk;
-    ret = get_pve_psk(&msg4_input->equivalent_psvn, &psk);//generate Provisioning Seal Key used to unseal f
+    //sgx_key_128bit_t psk;
+    sgx::custom_alignment_aligned<sgx_key_128bit_t, sizeof(sgx_key_128bit_t), 0, sizeof(sgx_key_128bit_t)> opsk;
+    sgx_key_128bit_t* ppsk = &opsk.v;
+    ret = get_pve_psk(&msg4_input->equivalent_psvn, ppsk);//generate Provisioning Seal Key used to unseal f
     if(PVEC_SUCCESS != ret){
         goto ret_point;
     }
@@ -75,7 +88,7 @@ static pve_status_t proc_prov_msg4_membercredential(const membership_credential_
         goto ret_point;
     }
     //Decrypt private key f (which had been sealed in ProvMsg3)
-    sgx_status = sgx_rijndael128GCM_decrypt(reinterpret_cast<const sgx_aes_gcm_128bit_key_t *>(&psk),
+    sgx_status = sgx_rijndael128GCM_decrypt(reinterpret_cast<const sgx_aes_gcm_128bit_key_t *>(ppsk),
         reinterpret_cast<const uint8_t *>(&mce->escrow.f), sizeof(FpElemStr), reinterpret_cast<uint8_t *>(&prv_key.f),
         mce->escrow.iv, IV_SIZE, NULL, 0, 
         reinterpret_cast<const sgx_aes_gcm_128bit_tag_t *>(mce->escrow.mac));
@@ -94,7 +107,7 @@ ret_point:
     if(PVEC_SUCCESS != ret){
         (void)memset_s(&prv_key, sizeof(prv_key),0, sizeof(prv_key));
     }
-    (void)memset_s(&psk,sizeof(psk),0,sizeof(psk));
+    (void)memset_s(ppsk,sizeof(*ppsk),0,sizeof(*ppsk));
     return ret;
 }
 
@@ -118,10 +131,7 @@ static pve_status_t gen_epid_blob(const extended_epid_group_blob_t* pxegb,
     se_secret_epid_data_sdk_t *epid_data = NULL;
     se_plaintext_epid_data_sdk_t *plaintext = NULL;
     uint32_t tmp_buffer_size = static_cast<uint32_t>(sizeof(se_plaintext_epid_data_sdk_t) + sizeof(se_secret_epid_data_sdk_t));
-    if(!EpidIsPrivKeyInGroup(pub_key, prv_key)){
-        ret = PVEC_MSG_ERROR;
-        goto ret_point;
-    }
+
     //alloc one temp buffer to hold both plaintext and secret data before encryption
     //all data before encryption will be copied into the buffer inorder
     tmp_buffer = reinterpret_cast<uint8_t *>(malloc(tmp_buffer_size));
@@ -145,22 +155,41 @@ static pve_status_t gen_epid_blob(const extended_epid_group_blob_t* pxegb,
     memcpy(&plaintext->qsdk_mod, pxegb->qsdk_mod, sizeof(plaintext->qsdk_mod));
     memcpy(&plaintext->epid_sk, pxegb->epid_sk, sizeof(plaintext->epid_sk));
     memcpy(&epid_data->epid_private_key,prv_key,sizeof(PrivKey)); //EPID Private key is sealed in EPID_DATA_BLOB together with Member Precomputation
-    epid_ret = EpidMemberCreate(&(plaintext->epid_group_cert),
-            (PrivKey*)&(epid_data->epid_private_key),
-            NULL,
-            epid_random_func,
-            NULL,
-            &p_epid_context);
+
+    epid_ret = epid_member_create(epid_random_func, NULL, NULL, &p_epid_context);
     if(kEpidNoErr!=epid_ret){
         ret = epid_error_to_pve_error(epid_ret);
         goto ret_point;
     }
+
+    epid_ret = EpidProvisionKey(p_epid_context,
+        &(plaintext->epid_group_cert),
+        (PrivKey*)&(epid_data->epid_private_key),
+        NULL);
+    if (kEpidNoErr != epid_ret) {
+        ret = epid_error_to_pve_error(epid_ret);
+        goto ret_point;
+    }
+
+    // Verify private key is in group
+    if (0 != memcmp(&pub_key->gid, &prv_key->gid, sizeof(prv_key->gid)) 
+        || !EpidMemberIsKeyValid(p_epid_context, &prv_key->A, &prv_key->x, &pub_key->h1, &pub_key->w)) {
+        ret = PVEC_MSG_ERROR;
+        goto ret_point;
+    }
+
+    // start member
+    epid_ret = EpidMemberStartup(p_epid_context);
+    if (kEpidNoErr != epid_ret) {
+        ret = epid_error_to_pve_error(epid_ret);
+        goto ret_point;
+    }
+
     epid_ret = EpidMemberWritePrecomp(p_epid_context, &epid_data->member_precomp_data);//Create Member Precomputation
     if(kEpidNoErr!=epid_ret){
         ret = epid_error_to_pve_error(epid_ret);
         goto ret_point;
     }
-    EpidMemberDelete(&p_epid_context);
     //call sgx_seal_data to generate EPID_DATA_BLOB
     if((sgx_status=sgx_seal_data(
         sizeof(se_plaintext_epid_data_sdk_t), reinterpret_cast<uint8_t*>(plaintext),//plaintext as AAD
@@ -171,6 +200,7 @@ static pve_status_t gen_epid_blob(const extended_epid_group_blob_t* pxegb,
             goto ret_point;
     }
 ret_point:
+    epid_member_delete(&p_epid_context);
     if(tmp_buffer){
         //reset memory to 0 of the temp buffer to defense in depth
         (void)memset_s(tmp_buffer,tmp_buffer_size, 0, tmp_buffer_size);
@@ -191,16 +221,20 @@ pve_status_t proc_prov_msg4_data(const proc_prov_msg4_input_t *msg4_input,
     pve_status_t ret = PVEC_SUCCESS;
     sgx_status_t sgx_status = SGX_SUCCESS;
     uint8_t pek_result = SGX_EC_INVALID_SIGNATURE;
-    sgx_key_128bit_t pwk2;
-    PrivKey prv_key;
+    //sgx_key_128bit_t pwk2;
+    //PrivKey prv_key;
+    sgx::custom_alignment_aligned<sgx_key_128bit_t, sizeof(sgx_key_128bit_t), 0, sizeof(sgx_key_128bit_t)> opwk2;
+    sgx_key_128bit_t* ppwk2 = &opwk2.v;
+    sgx::custom_alignment<PrivKey, __builtin_offsetof(PrivKey, f), 32> oprv_key;
+    PrivKey* pprv_key = &oprv_key.v;
     uint8_t aad_buf[sizeof(device_id_t)+sizeof(GroupId)];
     extended_epid_group_blob_t local_xegb;
     device_id_t *device_id_in_aad = reinterpret_cast<device_id_t *>(aad_buf+sizeof(GroupId));
     membership_credential_with_escrow_t *mce = reinterpret_cast<membership_credential_with_escrow_t *>(member_escrow_tlv_buf+MEMBERSHIP_CREDENTIAL_TLV_HEADER_SIZE);
     memset(member_escrow_tlv_buf, 0, sizeof(member_escrow_tlv_buf));
     memset(aad_buf, 0 ,sizeof(aad_buf));
-    memset(&pwk2, 0, sizeof(pwk2));
-    memset(&prv_key, 0, sizeof(prv_key));
+    memset(ppwk2, 0, sizeof(*ppwk2));
+    memset(pprv_key, 0, sizeof(*pprv_key));
 
     sgx_status = verify_xegb_with_default(msg4_input->xegb, &pek_result,local_xegb);
     if(SGX_SUCCESS != sgx_status){
@@ -217,7 +251,7 @@ pve_status_t proc_prov_msg4_data(const proc_prov_msg4_input_t *msg4_input,
         goto ret_point;
     }
     //create PWK2
-    ret = get_pwk2(&msg4_input->equivalent_psvn, msg4_input->n2, &pwk2);
+    ret = random_stack_advance(get_pwk2,&msg4_input->equivalent_psvn, msg4_input->n2, ppwk2);
     if (PVEC_SUCCESS != ret){
         goto ret_point;
     }
@@ -227,11 +261,12 @@ pve_status_t proc_prov_msg4_data(const proc_prov_msg4_input_t *msg4_input,
     memcpy(&device_id_in_aad->psvn, &msg4_input->equivalent_psvn, sizeof(psvn_t));
     memset(&device_id_in_aad->ppid, 0 ,sizeof(ppid_t));
 
-    se_static_assert(sizeof(sgx_aes_gcm_128bit_key_t)==sizeof(pwk2)); /*SK_SIZE should be same as that of sgx_aes_gcm_128bit_key_t*/
+    se_static_assert(sizeof(sgx_aes_gcm_128bit_key_t)==sizeof(*ppwk2)); /*SK_SIZE should be same as that of sgx_aes_gcm_128bit_key_t*/
     se_static_assert(sizeof(sgx_aes_gcm_128bit_tag_t)==sizeof(msg4_input->member_credential_mac)); /*member_credential_mac size should be same as that of sgx_aes_gcm_128bit_tag_t*/
+
     se_static_assert(HARD_CODED_EPID_MEMBER_WITH_ESCROW_TLV_SIZE == MEMBERSHIP_CREDENTIAL_TLV_TOTAL_SIZE); /*hardcoded size should be matched*/
 
-    sgx_status = sgx_rijndael128GCM_decrypt(reinterpret_cast<sgx_aes_gcm_128bit_key_t *>(&pwk2),
+    sgx_status = sgx_rijndael128GCM_decrypt(reinterpret_cast<sgx_aes_gcm_128bit_key_t *>(ppwk2),
         msg4_input->encrypted_member_credential,static_cast<uint32_t>(HARD_CODED_EPID_MEMBER_WITH_ESCROW_TLV_SIZE), member_escrow_tlv_buf,
         msg4_input->member_credential_iv, IV_SIZE, aad_buf, sizeof(aad_buf),
         reinterpret_cast<const sgx_aes_gcm_128bit_tag_t *>(msg4_input->member_credential_mac));//decrypt membership credential and escrow data TLV
@@ -248,15 +283,15 @@ pve_status_t proc_prov_msg4_data(const proc_prov_msg4_input_t *msg4_input,
     }
 
     se_static_assert(sizeof(membership_credential_with_escrow_t)+MEMBERSHIP_CREDENTIAL_TLV_HEADER_SIZE==MEMBERSHIP_CREDENTIAL_TLV_TOTAL_SIZE); /*invalid hard-coded value*/
-    ret = proc_prov_msg4_membercredential(mce, msg4_input, prv_key);//decrypt and generate epid private key
+    ret = random_stack_advance(proc_prov_msg4_membercredential, mce, msg4_input, *pprv_key);//decrypt and generate epid private key
     if(PVEC_SUCCESS!=ret){
         goto ret_point;
     }
-    ret = gen_epid_blob(&local_xegb, &prv_key, &msg4_input->equivalent_psvn, &msg4_input->group_cert.key, epid_blob);//seal epid private key to generate EPID data blob
+    ret = gen_epid_blob(&local_xegb, pprv_key, &msg4_input->equivalent_psvn, &msg4_input->group_cert.key, epid_blob);//seal epid private key to generate EPID data blob
 ret_point:
     //now clear secret data from memory to defense in depth
-    (void)memset_s(&pwk2,sizeof(pwk2), 0, sizeof(pwk2));
-    (void)memset_s(&prv_key, sizeof(prv_key), 0, sizeof(prv_key));
+    (void)memset_s(ppwk2,sizeof(*ppwk2), 0, sizeof(*ppwk2));
+    (void)memset_s(pprv_key, sizeof(*pprv_key), 0, sizeof(*pprv_key));
     (void)memset_s(member_escrow_tlv_buf, sizeof(member_escrow_tlv_buf), 0, sizeof(member_escrow_tlv_buf));
     (void)memset_s(aad_buf, sizeof(aad_buf), 0, sizeof(aad_buf));
     return ret;

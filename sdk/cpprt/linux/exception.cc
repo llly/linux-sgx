@@ -37,8 +37,8 @@
 #include "thread_data.h"
 #include "se_cdefs.h"
 
-// access the version varible to add a version to tstdcxx lib
-SGX_ACCESS_VERSION(tstdcxx, 1)
+// access the version varible to add a version to tcxx lib
+SGX_ACCESS_VERSION(tcxx, 1)
 
 using namespace ABI_NAMESPACE;
 
@@ -1352,11 +1352,30 @@ namespace std
 	 * Returns whether there are any exceptions currently being thrown that
 	 * have not been caught.  This can occur inside a nested catch statement.
 	 */
+#if  __cplusplus <= 201703L
+#if  __cplusplus < 201103L
 	bool uncaught_exception() throw()
+#else
+    bool uncaught_exception() noexcept
+#endif
 	{
 		__cxa_thread_info *info = thread_info();
 		return info->globals.uncaughtExceptions != 0;
 	}
+#endif
+
+	/**
+	 * Detects how many exceptions in the current thread have been thrown or rethrown
+     * and not yet entered their matching catch clauses.
+	 */
+#if  __cplusplus >= 201703L
+	int uncaught_exceptions() noexcept
+	{
+		__cxa_thread_info *info = thread_info();
+		return info->globals.uncaughtExceptions;
+	}
+#endif
+
 	/**
 	 * Returns the current unexpected handler.
 	 */

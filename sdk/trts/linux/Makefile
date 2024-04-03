@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -46,27 +46,45 @@ CXXFLAGS += -Werror $(ENCLAVE_CXXFLAGS)      \
 TCFLAGS   += -nostdinc \
              -I$(COMMON_DIR)/inc/tlibc/
 
+ifneq ($(MITIGATION-CVE-2020-0551), LOAD)
+ifneq ($(MITIGATION-CVE-2020-0551), CF)
+# Enable below flag to treat warning as error for assembly code
+# It doesn't work for mitigation mode.
+        TCFLAGS += -Wa,--fatal-warnings
+endif
+endif
+
 LDCFLAGS  := -shared -nostdlib -nodefaultlibs -nostartfiles
 
-CPP_SRCS  := $(wildcard ../*.cpp)
-C_SRCS    := $(wildcard *.c)
-ASM_SRCS  := $(wildcard *.S)
+CPP_SRCS  := $(filter-out ../trts_emm_sim.cpp, $(wildcard ../*.cpp))
+C_SRCS    := $(wildcard *.c) $(wildcard ../*.c)
+ASM_SRCS  := $(wildcard *.S) \
+             $(COMMON_DIR)/src/linux/xsave_gnu.S
 OBJS      := $(CPP_SRCS:.cpp=.o)
 OBJS      += $(C_SRCS:.c=.o)
 OBJS      += $(ASM_SRCS:.S=.o)
 OBJS      := $(sort $(OBJS))
 
 LIBTRTS = libsgx_trts.a
+LIBSGX_MM_PATH = $(LINUX_EXTERNAL_DIR)/sgx-emm
+LIBSGX_MM = libsgx_mm.a
 
 .PHONY: all
 all: $(LIBTRTS) | $(BUILD_DIR)
 	$(CP) $(LIBTRTS) $|
 
-$(LIBTRTS): $(OBJS) setcontext.o
+$(LIBSGX_MM):
+	$(MAKE) -C $(LIBSGX_MM_PATH)
+
+$(LIBTRTS): $(OBJS) $(LIBSGX_MM)
 	$(AR) rsD $@ $(OBJS) 
-	$(AR) rsD $@ $(ARCH)/setcontext.o
+	$(MKDIR) $(BUILD_DIR)/.libsgx_mm
+	$(RM) $(BUILD_DIR)/.libsgx_mm/* && cd $(BUILD_DIR)/.libsgx_mm && $(AR) x $(LIBSGX_MM_PATH)/libsgx_mm.a
+	$(AR) rsD $@ $(BUILD_DIR)/.libsgx_mm/*.o
+	@$(RM) -rf $(BUILD_DIR)/.libsgx_mm
 
 %.o: %.S
+	echo $(ASM_SRCS)
 	$(CC) $(CFLAGS) $(TCFLAGS) -c $< -o $@
 
 %.o: %.c
@@ -78,14 +96,10 @@ $(LIBTRTS): $(OBJS) setcontext.o
 $(BUILD_DIR):
 	@$(MKDIR) $@
 
-.PHONY: setcontext.o
-setcontext.o:
-	$(MAKE) -C $(ARCH)
-
 .PHONY: clean
 clean:
 	@$(RM) $(OBJS) $(LIBTRTS) $(BUILD_DIR)/$(LIBTRTS) 
-	$(MAKE) -C $(ARCH) clean
+	@$(MAKE) -C $(LIBSGX_MM_PATH) clean
 
 .PHONY: rebuild
 rebuild:

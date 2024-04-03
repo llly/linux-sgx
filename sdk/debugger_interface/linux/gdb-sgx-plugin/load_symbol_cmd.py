@@ -1,6 +1,5 @@
-#!/usr/bin/env python
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -30,6 +29,8 @@
 #
 #
 
+# -*- coding: iso-8859-15 -*-
+
 try:
     from cStringIO import StringIO
 except ImportError:
@@ -54,7 +55,7 @@ def GetLoadSymbolCommand(EnclaveFile, Base):
         # their offsets and add the Proj base address.
         for line in FileList:
             list = line.split();
-            if(len(list) > 0):
+            if(len(list) > 1):
                 SegOffset = -1;
                 # The readelf will put a space after the open bracket for single
                 # digit section numbers.  This causes the line.split to create
@@ -87,7 +88,7 @@ def GetLoadSymbolCommand(EnclaveFile, Base):
             # Write the GDB 'add-symbol-file' command with all the arguments to the setup GDB command file.
             # Note: The mandatory argument for the 'add-symbol-file' command is the .text section without a
             # '-s .SectionName'.  All other sections need the '-s .SectionName'.
-            gdbcmd = "add-symbol-file '" + EnclaveFile + "' " + '%(Location)#08x' % {'Location':int(Out[99][2])} + " -readnow "
+            gdbcmd = "add-symbol-file '" + EnclaveFile + "' " + '%(Location)#08x' % {'Location':int(Out[99][2])} + " "
             for j in range(i):
                 gdbcmd += Out[j][0] + " " + Out[j][1] + " " + '%(Location)#08x' % {'Location' : int(Out[j][2])} + " " + Out[j][3]
         else:

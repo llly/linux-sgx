@@ -1,6 +1,5 @@
-#!/usr/bin/env python
 #
-# Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+# Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -37,6 +36,8 @@ import os.path
 from ctypes import create_string_buffer
 import load_symbol_cmd
 import sgx_emmt
+import ctypes
+import re
 
 # Calculate the bit mode of current debuggee project
 SIZE = gdb.parse_and_eval("sizeof(long)")
@@ -47,12 +48,13 @@ PAGE_SIZE = 0x1000
 KB_SIZE = 1024
 # The following definitions should strictly align with the structure of
 # debug_enclave_info_t in uRTS.
-# Here we only care about the first 7 items in the structure.
+# Here we only care about the first 9 items in the structure.
 # pointer: next_enclave_info, start_addr, tcs_list, lpFileName,
-#          g_peak_heap_used_addr
+#          g_peak_heap_used_addr, g_peak_rsrv_mem_committed_addr
 # int32_t: enclave_type, file_name_size
-ENCLAVE_INFO_SIZE = 5 * 8 + 2 * 4
-INFO_FMT = 'QQQIIQQ'
+# uint64_t: elrange_start_address
+ENCLAVE_INFO_SIZE = 8 * 7 + 2 * 4
+INFO_FMT = 'QQQIIQQQQ'
 ENCLAVES_ADDR = {}
 
 # The following definitions should strictly align with the struct of
@@ -117,11 +119,12 @@ def target_path_to_host_path(target_path):
     return host_path
 
 class enclave_info(object):
-    """Class to contain the enclave inforation,
+    """Class to contain the enclave information,
     such as start address, stack addresses, stack size, etc.
     The enclave information is for one enclave."""
     def __init__(self, _next_ei, _start_addr, _enclave_type, _stack_addr_list, \
-            _stack_size, _enclave_path, _heap_addr, _tcs_addr_list):
+            _stack_size, _enclave_path, _heap_addr, _tcs_addr_list, _rsrv_mem_addr, \
+            _elrange_start_address):
         self.next_ei         =   _next_ei
         self.start_addr      =   _start_addr
         self.enclave_type    =   _enclave_type
@@ -130,6 +133,8 @@ class enclave_info(object):
         self.enclave_path    =   _enclave_path
         self.heap_addr       =   _heap_addr
         self.tcs_addr_list   =   _tcs_addr_list
+        self.rsrv_mem_addr   =   _rsrv_mem_addr
+        self.elrange_start_address = _elrange_start_address
     def __str__(self):
         print ("stack address list = {0:s}".format(self.stack_addr_list))
         return "start_addr = %#x, enclave_path = \"%s\", stack_size = %d" \
@@ -146,13 +151,14 @@ class enclave_info(object):
         if (self.enclave_type & ET_SIM) != ET_SIM and (self.enclave_type & ET_DEBUG) != ET_DEBUG:
             print ('Warning: {0:s} is a product hardware enclave. It can\'t be debugged and sgx_emmt doesn\'t work'.format(self.enclave_path))
             return -1
-        # set TCS debug flag
+        # set TCS debug flag, clear AEXNOTIFY
         for tcs_addr in self.tcs_addr_list:
             string = read_from_memory(tcs_addr + 8, 4)
             if string == None:
                 return 0
             flag = struct.unpack('I', string)[0]
             flag |= 1
+            flag &= (~2)
             gdb_cmd = "set *(unsigned int *)%#x = %#x" %(tcs_addr + 8, flag)
             gdb.execute(gdb_cmd, False, True)
         #If it is a product enclave, won't reach here.
@@ -185,6 +191,20 @@ class enclave_info(object):
         peak_heap_used = struct.unpack(fmt, string)[0]
         return peak_heap_used
 
+    def get_peak_rsrv_mem_committed(self):
+        """Get the peak value of the reserved memory committed"""
+        if self.rsrv_mem_addr == 0:
+            return -2
+        string = read_from_memory(self.rsrv_mem_addr, SIZE)
+        if string == None:
+            return -1
+        if SIZE == 4:
+            fmt = 'I'
+        elif SIZE == 8:
+            fmt = 'Q'
+        peak_rsrv_mem_committed = struct.unpack(fmt, string)[0]
+        return peak_rsrv_mem_committed
+
     def internal_compare (self, a, b):
         return (a > b) - (a < b)
 
@@ -216,27 +236,57 @@ class enclave_info(object):
                 high = mid -1
         return page_index
 
-
     def get_peak_stack_used(self):
         """Get the peak value of the stack used"""
         peak_stack_used = 0
-        gen = (addr for addr in self.stack_addr_list if addr != 0)
-        for stack_addr in gen:
-            page_index = self.find_boundary_page_index(stack_addr, self.stack_size)
-            if page_index == (self.stack_size)/PAGE_SIZE - 1:
-                continue
-            elif page_index == -2:
+        for tcs_addr in self.tcs_addr_list:
+            tcs_str = read_from_memory(tcs_addr, ENCLAVE_TCS_INFO_SIZE)
+            if tcs_str == None:
                 return -1
+            tcs_tuple = struct.unpack_from(TCS_INFO_FMT, tcs_str)
+            offset = tcs_tuple[7]
+            if SIZE == 4:
+                td_fmt = '20I'
+            elif SIZE == 8:
+                td_fmt = '20Q'
+
+            if (self.elrange_start_address == self.start_addr) or ((self.enclave_type & ET_SIM) == ET_SIM):
+                td_addr = self.start_addr + offset
             else:
-                string = read_from_memory(stack_addr + (page_index+1) * PAGE_SIZE, PAGE_SIZE)
-                if string == None:
+                td_addr = self.elrange_start_address + offset
+
+            td_str = read_from_memory(td_addr, (20*SIZE))
+            if td_str == None:
+                return -1
+            td_tuple = struct.unpack_from(td_fmt, td_str)
+
+            stack_commit_addr = td_tuple[19]
+            stack_base_addr = td_tuple[2]
+            stack_limit_addr = td_tuple[3]
+
+            stack_usage = 0
+            if stack_commit_addr > stack_limit_addr:
+                stack_base_addr_page_align = (stack_base_addr + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1)
+                stack_usage = stack_base_addr_page_align - stack_commit_addr
+            elif stack_limit_addr != 0:
+                page_index = self.find_boundary_page_index(stack_limit_addr, self.stack_size)
+                if page_index == (self.stack_size)/PAGE_SIZE - 1:
+                    continue
+                elif page_index == -2:
                     return -1
-                for i in range(0, len(string)):
-                    temp = struct.unpack_from("B", string, i)[0]
-                    if (self.internal_compare(temp, 0xcc)) != 0:
-                        if peak_stack_used < (self.stack_size - (page_index+1) * PAGE_SIZE - i):
-                            peak_stack_used = self.stack_size- (page_index+1) * PAGE_SIZE - i
-                            break  # go to the top for loop
+                else:
+                    string = read_from_memory(stack_limit_addr + (page_index+1) * PAGE_SIZE, PAGE_SIZE)
+                    if string == None:
+                        return -1
+                    for i in range(0, len(string)):
+                        temp = struct.unpack_from("B", string, i)[0]
+                        if (self.internal_compare(temp, 0xcc)) != 0:
+                            stack_usage = self.stack_size - (page_index+1) * PAGE_SIZE - i
+                            break
+
+            if peak_stack_used < stack_usage:
+                peak_stack_used = stack_usage
+
         return peak_stack_used
 
     def show_emmt(self):
@@ -257,6 +307,14 @@ class enclave_info(object):
             else:
                 peak_heap_used_align = (peak_heap_used + KB_SIZE - 1) & ~(KB_SIZE - 1)
                 print ("  [Peak heap used]:  {0:d} KB".format(peak_heap_used_align >> 10))
+            peak_rsrv_mem_committed = self.get_peak_rsrv_mem_committed()
+            if peak_rsrv_mem_committed == -2:
+                print ("  [Can't get peak committed reserved memory]: You may use version script to control symbol export. Please export \'g_peak_rsrv_mem_committed\' in your version script.")
+            elif peak_rsrv_mem_committed == -1:
+                print ("Failed to collect the reserved memory usage information for \"{0:s}\"".format(self.enclave_path))
+            else:
+                peak_rsrv_committed_align = (peak_rsrv_mem_committed + KB_SIZE - 1) & ~(KB_SIZE - 1)
+                print ("  [Peak reserved memory used]:  {0:d} KB".format(peak_rsrv_committed_align >> 10))
 
     def fini_enclave_debug(self):
         # If it is HW product enclave, nothing to do
@@ -265,6 +323,8 @@ class enclave_info(object):
         self.show_emmt()
         try:
             # clear TCS debug flag
+            # TODO - We may also need to recover AEXNOTIFY bit.
+            # It requires us to save the orig AEXNOTIFY bit before init_enclave_debug()
             for tcs_addr in self.tcs_addr_list:
                 string = read_from_memory(tcs_addr + 8, 4)
                 if string == None:
@@ -295,6 +355,13 @@ class enclave_info(object):
         except:
             return -1
 
+    def append_tcs_list(self, tcs_addr):
+        for tcs_tmp in self.tcs_addr_list:
+    	    if tcs_tmp == tcs_addr:
+    	        return 0
+        self.tcs_addr_list.append(tcs_addr)
+        return 0
+
 def retrieve_enclave_info(info_addr = 0):
     """retrieve one enclave info"""
     # Step 1: find the enclave info address
@@ -313,8 +380,8 @@ def retrieve_enclave_info(info_addr = 0):
     #   lpFileName,g_peak_heap_used_addr)
     #print "next_addr: %#x, start_addr: %#x, tcs_list: %#x, enclave_type:%#x,  file_name_size: %#x," \
     #    % (info_tuple[0], info_tuple[1], info_tuple[2], info_tuple[3], info_tuple[4])
-    #print "name_addr: %#x, peak_heap_used_addr: %#x" \
-    #    % (info_tuple[5], info_tuple[6])
+    #print ("name_addr: %#x, peak_heap_used_addr: %#x" % (info_tuple[5], info_tuple[6]))
+    #print ("peak_rsrv_committed_addr: %#x" % (info_tuple[7]))
     #get enclave path
     name_str = read_from_memory(info_tuple[5], info_tuple[4])
     if name_str == None:
@@ -334,7 +401,7 @@ def retrieve_enclave_info(info_addr = 0):
         return None
 
     stacksize = 0;
-    while tcs_info_addr is not 0:
+    while tcs_info_addr != 0:
         tcs_info_str = read_from_memory(tcs_info_addr, 3*SIZE)
         if tcs_info_str == None:
             return None
@@ -352,7 +419,11 @@ def retrieve_enclave_info(info_addr = 0):
             td_fmt = '4Q'
 
         #get thread_data_t address
-        td_addr = tcs_t_tuple[7] + info_tuple[1]     #thread_data_t = tcs.of_base + debug_enclave_info.start_addr
+        if (info_tuple[8] == info_tuple[1]) or ((info_tuple[3] & ET_SIM) == ET_SIM):
+            td_addr = tcs_t_tuple[7] + info_tuple[1]     #thread_data_t = tcs.of_base + debug_enclave_info.start_addr
+        else:
+            td_addr = tcs_t_tuple[7] + info_tuple[8]     #thread_data_t = tcs.of_base + debug_enclave_info.elrange_start_address
+       
         td_str = read_from_memory(td_addr, (4*SIZE))
         if td_str == None:
             return None
@@ -373,7 +444,7 @@ def retrieve_enclave_info(info_addr = 0):
 
         #print ("last_ocall_frame = {0:x}".format(last_ocall_frame))
 
-        while last_ocall_frame is not 0:
+        while last_ocall_frame != 0:
             if SIZE == 4:
                 of_fmt = '4I'
             elif SIZE == 8:
@@ -394,8 +465,10 @@ def retrieve_enclave_info(info_addr = 0):
             while last_trusted_ocall_frame != td_tuple[2]:
                 if SIZE == 4:
                     oc_fmt = '20I'
+                    ret_addr_of_fmt = 'I'
                 elif SIZE == 8:
                     oc_fmt = '20Q'
+                    ret_addr_of_fmt = 'Q'
 
                 oc_str = read_from_memory(last_trusted_ocall_frame, 20*SIZE)
                 if oc_str == None:
@@ -413,18 +486,23 @@ def retrieve_enclave_info(info_addr = 0):
                     #ocall_frame.pre_last_frame = 0
                     #ocall_frame.ret = ocall_context.ocall_ret
                     #ocall_frame.xbp = ocall_context.xbp
-                    gdb_cmd = "set *(uintptr_t *)%#x = 0" %(last_ocall_frame)
+                    xbp = oc_tuple[11]
+                    ret_addr_str = read_from_memory(xbp + SIZE, SIZE)
+                    if ret_addr_str == None:
+                        return None
+                    ret_addr_tuple = struct.unpack_from(ret_addr_of_fmt, ret_addr_str)
+                    gdb_cmd = "set *(uintptr_t *)%#x = 0" %(int(last_ocall_frame))
                     gdb.execute(gdb_cmd, False, True)
-                    gdb_cmd = "set *(uintptr_t *)%#x = %#x" %(last_ocall_frame+(2*SIZE), oc_tuple[11])
+                    gdb_cmd = "set *(uintptr_t *)%#x = %#x" %(int(last_ocall_frame+(2*SIZE)), xbp)
                     gdb.execute(gdb_cmd, False, True)
-                    gdb_cmd = "set *(uintptr_t *)%#x = %#x" %(last_ocall_frame+(3*SIZE), oc_tuple[19])
+                    gdb_cmd = "set *(uintptr_t *)%#x = %#x" %(int(last_ocall_frame+(3*SIZE)), ret_addr_tuple[0])
                     gdb.execute(gdb_cmd, False, True)
                     break
 
             last_ocall_frame = last_frame
 
     node = enclave_info(info_tuple[0], info_tuple[1], info_tuple[3], stack_addr_list, \
-        stacksize, enclave_path, info_tuple[6], tcs_addr_list)
+        stacksize, enclave_path, info_tuple[6], tcs_addr_list, info_tuple[7], info_tuple[8])
     return node
 
 def handle_load_event():
@@ -448,7 +526,7 @@ def is_bp_in_urts():
     try:
         ip = gdb.parse_and_eval("$pc")
         solib_name = gdb.solib_name(int(str(ip).split()[0], 16))
-        if(solib_name.find("libsgx_urts.so") == -1 and solib_name.find("libsgx_urts_sim.so") == -1 and solib_name.find("libsgx_aesm_service.so") == -1):
+        if(re.match('libsgx_urts.so[.0-9]*', os.path.basename(solib_name)) == None and solib_name.find("libsgx_urts_sim.so") == -1 and solib_name.find("libsgx_aesm_service.so") == -1):
             return False
         else:
             return True
@@ -521,7 +599,7 @@ class UpdateOcallFrame(gdb.Breakpoint):
                 td_fmt = '4I'
             elif SIZE == 8:
                 td_fmt = '4Q'
-
+            
             td_str = read_from_memory(base_addr+offset, (4*SIZE))
             if td_str == None:
                 return False
@@ -529,8 +607,10 @@ class UpdateOcallFrame(gdb.Breakpoint):
 
             if SIZE == 4:
                 trusted_of_fmt = '20I'
+                ret_addr_of_fmt = 'I'
             elif SIZE == 8:
                 trusted_of_fmt = '20Q'
+                ret_addr_of_fmt = 'Q'
 
             last_sp = td_tuple[1]
 
@@ -539,12 +619,21 @@ class UpdateOcallFrame(gdb.Breakpoint):
                 return False
             trusted_ocall_frame_tuple = struct.unpack_from(trusted_of_fmt, trusted_ocall_frame)
 
+            xbp = trusted_ocall_frame_tuple[11]
+
+            ret_addr_str = read_from_memory(xbp + SIZE, SIZE)
+            if ret_addr_str == None:
+                return False
+            ret_addr_tuple = struct.unpack_from(ret_addr_of_fmt, ret_addr_str)
+
+            gdb.execute("set language c++")
             gdb_cmd = "set *(uintptr_t *)%#x = 0" %(int(ocall_frame))
             gdb.execute(gdb_cmd, False, True)
-            gdb_cmd = "set *(uintptr_t *)%#x = %#x" %(int(ocall_frame+(2*SIZE)), trusted_ocall_frame_tuple[11])
+            gdb_cmd = "set *(uintptr_t *)%#x = %#x" %(int(ocall_frame+(2*SIZE)), xbp)
             gdb.execute(gdb_cmd, False, True)
-            gdb_cmd = "set *(uintptr_t *)%#x = %#x" %(int(ocall_frame+(3*SIZE)), trusted_ocall_frame_tuple[19])
+            gdb_cmd = "set *(uintptr_t *)%#x = %#x" %(int(ocall_frame+(3*SIZE)), ret_addr_tuple[0])
             gdb.execute(gdb_cmd, False, True)
+            gdb.execute("set language auto")
 
         return False
 
@@ -570,6 +659,38 @@ class UnloadEventBreakpoint(gdb.Breakpoint):
             handle_unload_event()
         return False
 
+class GetTCSBreakpoint(gdb.Breakpoint):
+    def __init__(self):
+        gdb.Breakpoint.__init__ (self, spec="urts_add_tcs", internal=1) # sgx_add_tcs should be fastcall
+
+    def stop(self):
+        bp_in_urts = is_bp_in_urts()
+
+        if bp_in_urts == True:
+            if SIZE == 4:
+                tcs_addr_1 = gdb.parse_and_eval("$eax")
+                tcs_addr = ctypes.c_uint32(tcs_addr_1).value
+            elif SIZE == 8:
+                tcs_addr_1 = gdb.parse_and_eval("$rdi")
+                tcs_addr = ctypes.c_uint64(tcs_addr_1).value
+            enclave_info_addr = gdb.parse_and_eval("*(void **)&g_debug_enclave_info_list")
+            if enclave_info_addr != 0:
+                node = retrieve_enclave_info(enclave_info_addr)
+            else:
+                return False
+            if node != None:
+                node.append_tcs_list(tcs_addr)
+            string = read_from_memory(tcs_addr + 8, 4)
+            if string == None:
+                return False
+            flag = struct.unpack('I', string)[0]
+            # set TCS debug flag, clear AEXNOTIFY
+            flag |= 1
+            flag &= (~2)
+            gdb_cmd = "set *(unsigned int *)%#x = %#x" %(tcs_addr + 8, flag)
+            gdb.execute(gdb_cmd, False, True)
+        return False
+
 def sgx_debugger_init():
     print ("detect urts is loaded, initializing")
     global SIZE
@@ -587,6 +708,7 @@ def sgx_debugger_init():
         UpdateOcallFrame()
         LoadEventBreakpoint()
         UnloadEventBreakpoint()
+        GetTCSBreakpoint()
         gdb.events.exited.connect(exit_handler)
     init_enclaves_debug()
 
@@ -599,7 +721,7 @@ def exit_handler(event):
 
 def newobj_handler(event):
     solib_name = os.path.basename(event.new_objfile.filename)
-    if solib_name == 'libsgx_urts.so' or solib_name == 'libsgx_urts_sim.so' or solib_name == 'libsgx_aesm_service.so':
+    if re.match('libsgx_urts.so[.0-9]*', solib_name) or solib_name == 'libsgx_urts_sim.so' or solib_name == 'libsgx_aesm_service.so':
         sgx_debugger_init()
     return
 

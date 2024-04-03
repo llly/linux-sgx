@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,7 +34,7 @@
 static inline void _mm_pause(void) __attribute__((always_inline));
 static inline int _InterlockedExchange(int volatile * dst, int val) __attribute__((always_inline));
 
-static inline void _mm_pause(void)
+static inline void _mm_pause(void)  /* definition requires -ffreestanding */
 {
     __asm __volatile(
         "pause"
@@ -58,15 +58,23 @@ static inline int _InterlockedExchange(int volatile * dst, int val)
    
 }
 
+#define MIN_BACKOFF 2
+#define MAX_BACKOFF 1024
 uint32_t sgx_spin_lock(sgx_spinlock_t *lock)
 {
     while(_InterlockedExchange((volatile int *)lock, 1) != 0) {
-        while (*lock) {
-            /* tell cpu we are spinning */
-            _mm_pause();
-        } 
+        int b = MIN_BACKOFF;
+        do
+        {    /* tell cpu we are spinning */
+            for (int i=0; i < b; i++) {
+                _mm_pause();
+            }
+            b <<= 1;
+            if (b > MAX_BACKOFF) {
+                b = MAX_BACKOFF;
+            }
+        } while (*lock);
     }
-
     return (0);
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -38,16 +38,15 @@
 #endif
 
 #include "sgx_error.h"
-#include "ae_ipp.h"
 #include "sgx_tcrypto.h"
 #include "se_sig_rl.h"
 
 sgx_status_t se_ecdsa_verify_internal(
-    IppsECCPState *p_ecp,
+    void *p_ecp,
     sgx_ec256_public_t *p_pubkey,
     sgx_ec256_signature_t *p_signature,
     const se_ae_ecdsa_hash_t *p_sig_rl_hash,
-    IppECResult *p_result);
+    void *p_result);
 
 #ifdef __cplusplus
  }

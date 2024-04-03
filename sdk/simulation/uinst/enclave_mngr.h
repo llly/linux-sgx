@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -56,8 +56,12 @@ public:
     virtual bool remove_page(const void* epc_lin_addr);
     virtual bool is_tcs_page(const void* pgaddr) const;
 
+    virtual void set_image_offset(uint64_t);
+    virtual uint64_t get_image_offset();
+
 private:
     secs_t          m_secs;
+    uint64_t        m_image_offset;
     si_flags_t*     m_flags;        // memory managed by CEnclaveSim
     size_t          m_cpages;       // page count
 

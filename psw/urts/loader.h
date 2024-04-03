@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -57,25 +57,27 @@ class CLoader: private Uncopyable
 public:
     CLoader(uint8_t *mapped_file_base, BinParser &parser);
     virtual ~CLoader();
-    int load_enclave(SGXLaunchToken *lc, int flag, const metadata_t *metadata, le_prd_css_file_t *prd_css_file = NULL, sgx_misc_attribute_t *misc_attr = NULL);
-    int load_enclave_ex(SGXLaunchToken *lc, bool is_debug, const metadata_t *metadata, le_prd_css_file_t *prd_css_file = NULL, sgx_misc_attribute_t *misc_attr = NULL);
+    int load_enclave(SGXLaunchToken *lc, int flag, const metadata_t *metadata, sgx_config_id_t *config_id, sgx_config_svn_t config_svn, le_prd_css_file_t *prd_css_file = NULL, sgx_misc_attribute_t *misc_attr = NULL);
+    int load_enclave_ex(SGXLaunchToken *lc, bool is_debug, const metadata_t *metadata, sgx_config_id_t *config_id, sgx_config_svn_t config_svn, le_prd_css_file_t *prd_css_file = NULL, sgx_misc_attribute_t *misc_attr = NULL);
     int destroy_enclave();
     sgx_enclave_id_t get_enclave_id() const;
     const void* get_start_addr() const;
+    uint64_t get_elrange_start_addr() const;
+    uint64_t get_elrange_size() const;
     const secs_t& get_secs() const;
-    const std::vector<tcs_t *>& get_tcs_list() const;
+    const std::vector<std::pair<tcs_t *, bool>>& get_tcs_list() const;
     void* get_symbol_address(const char* const sym);
     int set_memory_protection();
 
 private:
     int build_mem_region(const section_info_t &sec_info);
-    int build_image(SGXLaunchToken * const lc, sgx_attributes_t * const secs_attr, le_prd_css_file_t *prd_css_file, sgx_misc_attribute_t * const misc_attr);
-    int build_secs(sgx_attributes_t * const secs_attr, sgx_misc_attribute_t * const misc_attr);
+    int build_image(SGXLaunchToken * const lc, sgx_attributes_t * const secs_attr, sgx_config_id_t *config_id, sgx_config_svn_t config_svn, le_prd_css_file_t *prd_css_file, sgx_misc_attribute_t * const misc_attr);
+    int build_secs(sgx_attributes_t * const secs_attr, sgx_config_id_t *config_id, sgx_config_svn_t config_svn, sgx_misc_attribute_t * const misc_attr);
     int build_context(const uint64_t start_rva, layout_entry_t *layout);
     int build_contexts(layout_t *layout_start, layout_t *layout_end, uint64_t delta);
     int build_partial_page(const uint64_t rva, const uint64_t size, const void *source, const sec_info_t &sinfo, const uint32_t attr);
     int build_pages(const uint64_t start_rva, const uint64_t size, const void *source, const sec_info_t &sinfo, const uint32_t attr);
-    bool is_relocation_page(const uint64_t rva, vector<uint8_t> *bitmap);
+    bool is_relocation_page(const uint64_t rva, std::vector<uint8_t> *bitmap);
 
     bool is_ae(const enclave_css_t *enclave_css);
     bool is_metadata_buffer(uint32_t offset, uint32_t size);
@@ -84,15 +86,18 @@ private:
     int validate_patch_table();
     int validate_metadata();
     int get_debug_flag(const token_t * const launch);
-    virtual int build_sections(vector<uint8_t> *bitmap);
+    virtual int build_sections(std::vector<uint8_t> *bitmap);
     int set_context_protection(layout_t *layout_start, layout_t *layout_end, uint64_t delta);
+    int set_elrange_config();
 
     uint8_t             *m_mapped_file_base;
     sgx_enclave_id_t    m_enclave_id;
     void                *m_start_addr;
+    uint64_t            m_elrange_start_address;
+    uint64_t            m_elrange_size;
 
     // the TCS list
-    std::vector<tcs_t *> m_tcs_list;
+    std::vector<std::pair<tcs_t *, bool>> m_tcs_list;
     // the enclave creation parameters
     const metadata_t    *m_metadata;
     secs_t              m_secs;

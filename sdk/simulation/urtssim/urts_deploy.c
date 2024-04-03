@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -38,10 +38,32 @@ sgx_status_t sgx_create_enclave()
     return SGX_ERROR_UNEXPECTED;
 }
 
+sgx_status_t sgx_create_enclave_ex()
+{
+    printf("Please use the correct uRTS library from PSW package.\n");
+    return SGX_ERROR_UNEXPECTED;
+}
+
+sgx_status_t sgx_create_enclave_from_buffer_ex()
+{
+    printf("Please use the correct uRTS library from PSW package.\n");
+    return SGX_ERROR_UNEXPECTED;
+}
+
+sgx_status_t sgx_create_encrypted_enclave()
+{
+    printf("Please use the correct uRTS library from PSW package.\n");
+    return SGX_ERROR_UNEXPECTED;
+}
+
+
 void sgx_debug_load_state_add_element(){};
 void sgx_debug_unload_state_remove_element(){};
 void sgx_destroy_enclave(){};
+void sgx_get_target_info(){};
 void sgx_ecall(){};
+void sgx_ecall_switchless(){};
+void sgx_set_switchless_itf(){};
 void sgx_oc_cpuidex(){};
 void sgx_ocall(){};
 void sgx_thread_set_multiple_untrusted_events_ocall(){};
@@ -49,3 +71,25 @@ void sgx_thread_set_untrusted_event_ocall(){};
 void sgx_thread_setwait_untrusted_events_ocall(){};
 void sgx_thread_wait_untrusted_event_ocall(){};
 
+sgx_status_t pthread_create_ocall()
+{
+    printf("Please use the correct uRTS library from PSW package.\n");
+    return SGX_ERROR_UNEXPECTED;
+}
+sgx_status_t pthread_wait_timeout_ocall()
+{
+    printf("Please use the correct uRTS library from PSW package.\n");
+    return SGX_ERROR_UNEXPECTED;
+}
+
+sgx_status_t pthread_wakeup_ocall()
+{
+    printf("Please use the correct uRTS library from PSW package.\n");
+    return SGX_ERROR_UNEXPECTED;
+}
+
+sgx_status_t sgx_get_metadata()
+{
+    printf("Please use the correct uRTS library from PSW package.\n");
+    return SGX_ERROR_UNEXPECTED;
+}

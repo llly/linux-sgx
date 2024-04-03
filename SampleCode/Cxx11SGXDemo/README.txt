@@ -18,7 +18,7 @@ The project demonstrates serveral C++11 features inside the Enclave:
 - function object wrapper;
 - atomic, mutexes, condition_variables;
 - new smart pointer classes: shared_ptr, unique_ptr;
-- new c++ algorithms: all_off, any_of, none_of;
+- new c++ algorithms: all_of, any_of, none_of;
 - variadic templates;
 - SFINAE;
 
@@ -26,7 +26,12 @@ The project demonstrates serveral C++11 features inside the Enclave:
 How to Build/Execute the C++11 sample program
 ---------------------------------------------
 1. Install Intel(R) Software Guard Extensions (Intel(R) SGX) SDK for Linux* OS
-2. Build the project with the prepared Makefile:
+2. Enclave test key(two options):
+    a. Install openssl first, then the project will generate a test key<Enclave_private_test.pem> automatically when you build the project.
+    b. Rename your test key(3072-bit RSA private key) to <Enclave_private_test.pem> and put it under the <Enclave> folder.
+3. Make sure your environment is set:
+    $ source ${sgx-sdk-install-path}/environment
+4. Build the project with the prepared Makefile:
     a. Hardware Mode, Debug build:
         $ make
     b. Hardware Mode, Pre-release build:
@@ -39,6 +44,14 @@ How to Build/Execute the C++11 sample program
         $ make SGX_MODE=SIM SGX_PRERELEASE=1 SGX_DEBUG=0
     f. Simulation Mode, Release build:
         $ make SGX_MODE=SIM SGX_DEBUG=0
-3. Execute the binary directly:
+5. Execute the binary directly:
     $ ./app
-4. Remember to "make clean" before switching build mode
+6. Remember to "make clean" before switching build mode
+
+-------------------------------------------------
+Launch token initialization
+-------------------------------------------------
+If using libsgx-enclave-common or sgxpsw under version 2.4, an initialized variable launch_token needs to be passed as the 3rd parameter of API sgx_create_enclave. For example,
+
+sgx_launch_token_t launch_token = {0};
+sgx_create_enclave(ENCLAVE_FILENAME, SGX_DEBUG_FLAG, launch_token, NULL, &global_eid, NULL);

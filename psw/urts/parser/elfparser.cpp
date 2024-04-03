@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,6 +33,10 @@
 #include "se_trace.h"
 #include "se_memcpy.h"
 #include "global_data.h"
+#include "metadata.h"
+#include <sys/mman.h>
+#include <vector>
+#include <tuple>
 
 namespace {
 /** the callback function to filter a section.
@@ -107,28 +111,49 @@ const T* get_section_raw_data(const ElfW(Ehdr) *elf_hdr, ElfW(Addr) start_addr)
 bool validate_elf_header(const ElfW(Ehdr) *elf_hdr)
 {
     // validate magic number
-    if (memcmp(&elf_hdr->e_ident, ELFMAG, SELFMAG))
+    if (memcmp(&elf_hdr->e_ident, ELFMAG, SELFMAG)) {
+        SE_TRACE(SE_TRACE_ERROR, "Incorrect magic number\n");
         return false;
+    }
 
 #if RTS_SYSTEM_WORDSIZE == 64
-    if (ELFCLASS64 != elf_hdr->e_ident[EI_CLASS])
+    if (ELFCLASS64 != elf_hdr->e_ident[EI_CLASS]) {
+        SE_TRACE(SE_TRACE_ERROR, "Expected ELFCLASS64: 0x%x\n",
+                 elf_hdr->e_ident[EI_CLASS]);
         return false;
+    }
 #else
-    if (ELFCLASS32 != elf_hdr->e_ident[EI_CLASS])
+    if (ELFCLASS32 != elf_hdr->e_ident[EI_CLASS]) {
+        SE_TRACE(SE_TRACE_ERROR, "Expected ELFCLASS32: 0x%x\n",
+                 elf_hdr->e_ident[EI_CLASS]);
         return false;
+    }
 #endif
 
-    if (ELFDATA2LSB!= elf_hdr->e_ident[EI_DATA])
+    if (ELFDATA2LSB!= elf_hdr->e_ident[EI_DATA]) {
+        SE_TRACE(SE_TRACE_ERROR, "Expected ELFDATA2LSB: 0x%x\n",
+                 elf_hdr->e_ident[EI_DATA]);
         return false;
+    }
 
-    if (EV_CURRENT != elf_hdr->e_ident[EI_VERSION])
+    if (EV_CURRENT != elf_hdr->e_ident[EI_VERSION]) {
+        SE_TRACE(SE_TRACE_ERROR, "Expected EV_CURRENT: 0x%x\n",
+                 elf_hdr->e_ident[EI_VERSION]);
         return false;
+    }
 
-    if (ET_DYN != elf_hdr->e_type)
+    if (ET_DYN != elf_hdr->e_type) {
+        SE_TRACE(SE_TRACE_ERROR, "Expected ET_DYN: 0x%x\n",
+                 elf_hdr->e_type);
         return false;
+    }
 
-    if (sizeof(ElfW(Phdr)) != elf_hdr->e_phentsize)
+    if (sizeof(ElfW(Phdr)) != elf_hdr->e_phentsize) {
+        SE_TRACE(SE_TRACE_ERROR, "Expected phentsize == %d, got %d\n",
+                 sizeof(ElfW(Phdr)),
+                 elf_hdr->e_phentsize);
         return false;
+    }
 
     return true;
 }
@@ -181,7 +206,7 @@ bool parse_dyn(const ElfW(Ehdr) *elf_hdr, ElfW(Dyn)* dyn_info)
  * We only need to search `.dynsym' for undefined symbols.
  */
 bool check_symbol_table(const ElfW(Ehdr) *elf_hdr, const ElfW(Dyn) *dyn_info,
-                        map<string, uint64_t>& sym_table)
+                        std::map<std::string, uint64_t>& sym_table)
 {
     const ElfW(Shdr) *sh_symtab = get_section_by_addr(elf_hdr, dyn_info[DT_SYMTAB].d_un.d_ptr);
 
@@ -202,12 +227,12 @@ bool check_symbol_table(const ElfW(Ehdr) *elf_hdr, const ElfW(Dyn) *dyn_info,
     uint32_t sym_num = (uint32_t)(sh_symtab->sh_size/sh_symtab->sh_entsize);
     const char *strtab = get_section_raw_data<char>(elf_hdr, dyn_info[DT_STRTAB].d_un.d_ptr);
 
-    // We only store "enclave_entry", "g_global_data_sim" and "g_peak_heap_used".
+    // We only store "enclave_entry", "g_global_data", "g_blobal_data_sim", "g_peak_heap_used" and "g_peak_rsrv_mem_committed".
     // To export new symbols, add them here.
     //
     // "g_global_data_sim" is needed so that we can check that whether
     // an simulated enclave is given when running an HW loader.
-    const char* str[] = { "enclave_entry", "g_global_data_sim", "g_peak_heap_used", "g_global_data" };
+    const char* str[] = { "enclave_entry", "g_global_data_sim", "g_peak_heap_used", "g_global_data", "g_peak_rsrv_mem_committed" };
 
     // The first entry is reserved, and must be all zeros
     for (uint32_t idx = 1; idx < sym_num; ++idx)
@@ -242,7 +267,7 @@ bool check_symbol_table(const ElfW(Ehdr) *elf_hdr, const ElfW(Dyn) *dyn_info,
     // If the enclave if compiled/linked with -fpie/-pie, and setting the
     // enclave entry to `enclave_entry', the `st_name' for `enclave_entry'
     // will be 0 in `.dynsym'.
-    map<string, uint64_t>::const_iterator it = sym_table.find("enclave_entry");
+    std::map<std::string, uint64_t>::const_iterator it = sym_table.find("enclave_entry");
     if (it == sym_table.end())
     {
         sym_table["enclave_entry"] = (uint64_t)elf_hdr->e_entry;
@@ -434,7 +459,7 @@ bool validate_segment(const ElfW(Ehdr) *elf_hdr, uint64_t len)
 
             // Verify the overlap of segment. we don't verify here, because a well compiled file has no overlapped segment.
             load_seg[k].first = prg_hdr->p_vaddr;
-            load_seg[k].second = prg_hdr->p_vaddr + ROUND_TO(prg_hdr->p_memsz, prg_hdr->p_align) - 1;
+            load_seg[k].second = ROUND_TO(prg_hdr->p_vaddr + prg_hdr->p_memsz, prg_hdr->p_align) - 1;
 
             for (int j = 0; j < k; j++)
             {
@@ -501,7 +526,7 @@ Section* build_section(const uint8_t* raw_data, uint64_t size, uint64_t virtual_
 }
 
 bool build_regular_sections(const uint8_t* start_addr,
-                            vector<Section *>& sections,
+                            std::vector<Section *>& sections,
                             const Section*& tls_sec,
                             uint64_t& metadata_offset,
                             uint64_t& metadata_block_size)
@@ -509,6 +534,7 @@ bool build_regular_sections(const uint8_t* start_addr,
     const ElfW(Ehdr) *elf_hdr = (const ElfW(Ehdr) *)start_addr;
     const ElfW(Phdr) *prg_hdr = GET_PTR(ElfW(Phdr), start_addr, elf_hdr->e_phoff);
     uint64_t virtual_size = 0, alignment = 0, aligned_virtual_size = 0;
+    unsigned section_count = 1; /* Definition only used with se_trace(SE_TRACE_DEBUG) below */
 
     if (get_meta_property(start_addr, elf_hdr, metadata_offset, metadata_block_size) == false)
         return false;
@@ -523,6 +549,10 @@ bool build_regular_sections(const uint8_t* start_addr,
             sec = build_section(GET_PTR(uint8_t, start_addr, prg_hdr->p_offset),
                                 (uint64_t)prg_hdr->p_filesz, (uint64_t)prg_hdr->p_memsz,
                                 (uint64_t)prg_hdr->p_vaddr, (uint32_t) prg_hdr->p_flags);
+            se_trace(SE_TRACE_DEBUG, "LOAD Section: %d\n", section_count++);
+            se_trace(SE_TRACE_DEBUG, "Flags = 0x%016lX\n", (uint64_t)prg_hdr->p_flags);
+            se_trace(SE_TRACE_DEBUG, "VAddr = 0x%016lX\n", (uint64_t)prg_hdr->p_vaddr);
+            se_trace(SE_TRACE_DEBUG, "Size  = 0x%016lX\n\n", (uint64_t)prg_hdr->p_memsz);
             break;
 
         case PT_TLS:
@@ -538,6 +568,10 @@ bool build_regular_sections(const uint8_t* start_addr,
             sec = build_section(GET_PTR(uint8_t, start_addr, prg_hdr->p_offset),
                                 (uint64_t)prg_hdr->p_filesz, aligned_virtual_size,
                                 (uint64_t)prg_hdr->p_vaddr, (uint32_t) prg_hdr->p_flags);
+            se_trace(SE_TRACE_DEBUG, "TLS Section: %d\n", section_count++);
+            se_trace(SE_TRACE_DEBUG, "Flags = 0x%016lX\n", (uint64_t)prg_hdr->p_flags);
+            se_trace(SE_TRACE_DEBUG, "VAddr = 0x%016lX\n", (uint64_t)prg_hdr->p_vaddr);
+            se_trace(SE_TRACE_DEBUG, "Size  = 0x%016lX\n\n", (uint64_t)prg_hdr->p_memsz);
             break;
 
         default:
@@ -562,7 +596,7 @@ bool build_regular_sections(const uint8_t* start_addr,
     return true;
 }
 
-const Section* get_max_rva_section(const vector<Section*> sections)
+const Section* get_max_rva_section(const std::vector<Section*> sections)
 {
     size_t sec_size = sections.size();
 
@@ -593,45 +627,60 @@ sgx_status_t ElfParser::run_parser()
     if (m_sections.size() != 0) return SGX_SUCCESS;
 
     const ElfW(Ehdr) *elf_hdr = (const ElfW(Ehdr) *)m_start_addr;
-    if (elf_hdr == NULL || m_len < sizeof(ElfW(Ehdr)))
+    if (elf_hdr == NULL || m_len < sizeof(ElfW(Ehdr))) {
+        SE_TRACE_ERROR("Header invalid size\n");
         return SGX_ERROR_INVALID_ENCLAVE;
-
+    }
     /* Check elf header*/
-    if (!validate_elf_header(elf_hdr))
+    if (!validate_elf_header(elf_hdr)) {
+        SE_TRACE_ERROR("Header invalid\n");
         return SGX_ERROR_INVALID_ENCLAVE;
-
+    }
     /* Get and check machine mode */
-    if (!get_bin_fmt(elf_hdr, m_bin_fmt))
+    if (!get_bin_fmt(elf_hdr, m_bin_fmt)) {
+        SE_TRACE_ERROR("Bin fmt incorrect\n");
         return SGX_ERROR_MODE_INCOMPATIBLE;
+    }
 
     /* Check if there is any overlap segment, and make sure the segment is 1 page aligned;
     * TLS segment must exist.
     */
-    if (!validate_segment(elf_hdr, m_len))
+    if (!validate_segment(elf_hdr, m_len)) {
+        SE_TRACE_ERROR("Segment incorrect\n");
         return SGX_ERROR_INVALID_ENCLAVE;
+    }
 
-    if (!parse_dyn(elf_hdr, &m_dyn_info[0]))
+    if (!parse_dyn(elf_hdr, &m_dyn_info[0])) {
+        SE_TRACE_ERROR("Dyn incorrect\n");
         return SGX_ERROR_INVALID_ENCLAVE;
+    }
 
     /* Check if there is any undefined symbol */
     if (!check_symbol_table(elf_hdr, m_dyn_info, m_sym_table))
     {
+        SE_TRACE_ERROR("Symbol table incorrect\n");
         return SGX_ERROR_UNDEFINED_SYMBOL;
     }
 
     /* Check if there is unexpected relocation type */
-    if (!validate_reltabs(elf_hdr, m_dyn_info))
+    if (!validate_reltabs(elf_hdr, m_dyn_info)) {
+        SE_TRACE_ERROR("Reltabs incorrect\n");
         return SGX_ERROR_INVALID_ENCLAVE;
+    }
 
     /* Check if there is .ctor section */
-    if (has_ctor_section(elf_hdr))
+    if (has_ctor_section(elf_hdr)) {
+        SE_TRACE_ERROR("ctor section incorrect\n");
         return SGX_ERROR_INVALID_ENCLAVE;
+    }
 
     /* build regular sections */
     if (build_regular_sections(m_start_addr, m_sections, m_tls_section, m_metadata_offset, m_metadata_block_size))
         return SGX_SUCCESS;
-    else
+    else {
+        SE_TRACE_ERROR("Regular sections incorrect\n");
         return SGX_ERROR_INVALID_ENCLAVE;
+    }
 }
 
 ElfParser::~ElfParser()
@@ -645,12 +694,41 @@ bin_fmt_t ElfParser::get_bin_format() const
     return m_bin_fmt;
 }
 
+#include "cpuid.h"
+#include "se_detect.h"
+
 uint64_t ElfParser::get_enclave_max_size() const
 {
+#if !defined(SIGN) && !defined(SE_SIM)
+    int cpu_info[4] = {0, 0, 0, 0};
+    if(is_se_supported())
+    {
+        __cpuidex(cpu_info, SE_LEAF, 0);
+
+    	if(m_bin_fmt == BF_ELF64)
+        {
+            uint8_t exp = (uint8_t)((cpu_info[3] >> 8) & 0xFF);
+            if(exp < 64)
+                return (1ULL << exp);
+            else
+                return ENCLAVE_MAX_SIZE_64;
+        }
+        else
+        {
+          uint8_t exp = (uint8_t)(cpu_info[3] & 0xFF);
+          if(exp < 32)
+            return (1ULL << exp);
+          else
+            return ENCLAVE_MAX_SIZE_32;
+        }
+    }
+    return 0;
+#else
     if(m_bin_fmt == BF_ELF64)
         return ENCLAVE_MAX_SIZE_64;
     else
         return ENCLAVE_MAX_SIZE_32;
+#endif
 }
 
 uint64_t ElfParser::get_metadata_offset() const
@@ -669,7 +747,7 @@ const uint8_t* ElfParser::get_start_addr() const
     return m_start_addr;
 }
 
-const vector<Section *>& ElfParser::get_sections() const
+const std::vector<Section *>& ElfParser::get_sections() const
 {
     return m_sections;
 }
@@ -681,14 +759,23 @@ const Section* ElfParser::get_tls_section() const
 
 uint64_t ElfParser::get_symbol_rva(const char* name) const
 {
-    map<string, uint64_t>::const_iterator it = m_sym_table.find(name);
+    std::map<std::string, uint64_t>::const_iterator it = m_sym_table.find(name);
     if (it != m_sym_table.end())
         return it->second;
     else
         return 0;
 }
 
-bool ElfParser::get_reloc_bitmap(vector<uint8_t>& bitmap)
+bool ElfParser::has_text_reloc() const
+{
+    if (m_dyn_info[DT_TEXTREL].d_tag)
+    {
+        return true;
+    }
+    return false;
+}
+
+bool ElfParser::get_reloc_bitmap(std::vector<uint8_t>& bitmap)
 {
     // Clear the `bitmap' so that it is in a known state
     bitmap.clear();
@@ -769,7 +856,7 @@ bool ElfParser::get_reloc_bitmap(vector<uint8_t>& bitmap)
     return true;
 }
 
-void ElfParser::get_reloc_entry_offset(const char* sec_name, vector<uint64_t>& offsets)
+void ElfParser::get_reloc_entry_offset(const char* sec_name, std::vector<uint64_t>& offsets)
 {
     if (sec_name == NULL)
         return;
@@ -814,9 +901,15 @@ void ElfParser::get_reloc_entry_offset(const char* sec_name, vector<uint64_t>& o
     }
 }
 
+#include "se_page_attr.h"
 #include "update_global_data.hxx"
 
-bool ElfParser::update_global_data(const create_param_t* const create_param,
+uint32_t ElfParser::get_global_data_size()
+{
+    return (uint32_t)sizeof(global_data_t);
+}
+bool ElfParser::update_global_data(const metadata_t *const metadata,
+                                   const create_param_t* const create_param,
                                    uint8_t *data,
                                    uint32_t *data_size)
 {
@@ -825,9 +918,8 @@ bool ElfParser::update_global_data(const create_param_t* const create_param,
         *data_size = sizeof(global_data_t);
         return false;
     }
-    do_update_global_data(create_param, (global_data_t *)data);
     *data_size = sizeof(global_data_t);
-    return true;
+    return do_update_global_data(metadata, create_param, (global_data_t *)data);
 }
 
 sgx_status_t ElfParser::modify_info(enclave_diff_info_t *enclave_diff_info)
@@ -842,7 +934,7 @@ sgx_status_t ElfParser::get_info(enclave_diff_info_t *enclave_diff_info)
     return SGX_SUCCESS;
 }
 
-void ElfParser::get_executable_sections(vector<const char *>& xsec_names) const
+void ElfParser::get_executable_sections(std::vector<const char *>& xsec_names) const
 {
     xsec_names.clear();
 
@@ -856,4 +948,130 @@ void ElfParser::get_executable_sections(vector<const char *>& xsec_names) const
             xsec_names.push_back(shstrtab + shdr->sh_name);
     }
     return;
+}
+
+bool ElfParser::set_memory_protection(uint64_t enclave_base_addr)
+{
+    uint64_t len = 0;
+    int ret = 0;
+    uint64_t rva = 0;
+    uint64_t rva_end = 0;
+    uint64_t last_section_end = 0;
+    int prot = 0;
+    unsigned int i = 0;
+
+    //for sections
+    std::vector<Section*> sections = get_sections();
+
+    for(i = 0; i < sections.size() ; i++)
+    {
+        //require the sec_info.rva be page aligned, we need handle the first page.
+        //the first page;
+        uint64_t offset = (sections[i]->get_rva() & (SE_PAGE_SIZE -1));
+        uint64_t size = SE_PAGE_SIZE - offset;
+
+        //the raw data may be smaller than the size, we get the min of them
+        if(sections[i]->raw_data_size() < size)
+            size = sections[i]->raw_data_size();
+
+        len = SE_PAGE_SIZE;
+
+        //if there is more pages, then calc the next paged aligned pages
+        if((sections[i]->virtual_size() + offset) >  SE_PAGE_SIZE)
+        {
+            uint64_t raw_data_size = sections[i]->raw_data_size() - size;
+            //we need use (SE_PAGE_SIZE - offset), because (SE_PAGE_SIZE - offset) may larger than size
+            uint64_t virtual_size = sections[i]->virtual_size() - (SE_PAGE_SIZE - offset);
+            len += ROUND_TO_PAGE(raw_data_size);
+
+            if(ROUND_TO_PAGE(virtual_size) > ROUND_TO_PAGE(raw_data_size))
+            {
+                len += ROUND_TO_PAGE(virtual_size) - ROUND_TO_PAGE(raw_data_size);
+            }
+        }
+        rva = TRIM_TO_PAGE(sections[i]->get_rva()) + enclave_base_addr;
+        prot = (int)(sections[i]->get_si_flags()&SI_MASK_MEM_ATTRIBUTE);
+        ret = mprotect((void*)rva, (size_t)len, prot);
+        if(ret != 0)
+        {
+            return false;
+        }
+        //there is a gap between sections, need to set those to NONE access
+        if(last_section_end != 0)
+        {
+            prot = (int)(SI_FLAG_NONE & SI_MASK_MEM_ATTRIBUTE);
+            ret = mprotect((void*)last_section_end, (size_t)(rva - last_section_end), prot);
+            if(ret != 0)
+            {
+                return false;
+            }
+        }
+        last_section_end = rva + len;
+    }
+    
+    const ElfW(Ehdr) *elf_hdr = (const ElfW(Ehdr) *)m_start_addr;
+    const ElfW(Phdr) *prg_hdr = GET_PTR(ElfW(Phdr), elf_hdr, elf_hdr->e_phoff);
+
+    for (int idx = 0; idx < elf_hdr->e_phnum; idx++, prg_hdr++)
+    {
+       if(prg_hdr->p_type == PT_DYNAMIC ||
+          prg_hdr->p_type == PT_GNU_RELRO)
+       {
+           rva = TRIM_TO_PAGE(enclave_base_addr + prg_hdr->p_vaddr);
+           rva_end = ROUND_TO(enclave_base_addr + prg_hdr->p_vaddr + prg_hdr->p_memsz, prg_hdr->p_align);
+           len = rva_end - rva;
+           prot = (int)(page_attr_to_si_flags(prg_hdr->p_flags) & SI_MASK_MEM_ATTRIBUTE);
+           ret = mprotect((void*)rva, (size_t)len, prot);
+           if(ret != 0)
+           {
+                return false;
+           }
+       }
+    }
+    return true;
+}
+
+void ElfParser::get_pages_to_protect(uint64_t enclave_base_addr, std::vector<std::tuple<uint64_t, uint64_t, uint32_t>>& pages_to_protect) const
+{
+    uint64_t len = 0;
+    uint64_t rva = 0;
+    uint64_t rva_end = 0;
+
+    const ElfW(Ehdr) *elf_hdr = (const ElfW(Ehdr) *)m_start_addr;
+    const ElfW(Phdr) *prg_hdr = GET_PTR(ElfW(Phdr), elf_hdr, elf_hdr->e_phoff);
+
+    for (int idx = 0; idx < elf_hdr->e_phnum; idx++, prg_hdr++)
+    {
+        if( (prg_hdr->p_type == PT_GNU_RELRO) ||
+                ((prg_hdr->p_type == PT_LOAD) && has_text_reloc() && ((prg_hdr->p_flags & PF_W) == 0)) )
+        {
+            uint32_t perm = 0;
+            rva = TRIM_TO_PAGE(enclave_base_addr + prg_hdr->p_vaddr);
+            rva_end = ROUND_TO_PAGE(enclave_base_addr + prg_hdr->p_vaddr + prg_hdr->p_memsz);
+            len = rva_end - rva;
+
+            if (prg_hdr->p_flags & PF_R)
+                perm |= SI_FLAG_R;
+            if (prg_hdr->p_flags & PF_X)
+                perm |= SI_FLAG_X;
+
+            pages_to_protect.push_back(std::make_tuple(rva, len, perm));
+        }
+    }
+}
+
+bool ElfParser::is_enclave_encrypted() const
+{
+    // if enclave is encrypted, enclave must contain section .pcltbl
+    const char* sec_name = ".pcltbl";
+    const ElfW(Ehdr) *ehdr = (const ElfW(Ehdr) *)m_start_addr;
+    return (NULL != get_section_by_name(ehdr, sec_name));
+}
+
+
+bool ElfParser::has_init_section() const
+{
+    const char * sec_name = ".init";
+    const ElfW(Ehdr) *elf_hdr = (const ElfW(Ehdr) *)m_start_addr;
+    return (NULL != get_section_by_name(elf_hdr, sec_name)); 
 }

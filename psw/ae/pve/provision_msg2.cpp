@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -29,6 +29,8 @@
  *
  */
 
+#include <sgx_secure_align.h>
+#include <sgx_random_buffers.h>
 #include "msg3_parm.h"
 #include "se_sig_rl.h"
 #include "cipher.h"
@@ -36,6 +38,7 @@
 #include "pve_qe_common.h"
 #include "pek_pub_key.h"
 #include "byte_order.h"
+#include "sgx_lfence.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -75,6 +78,13 @@ static pve_status_t prov_msg2_proc_sigrl_header(const external_memory_byte_t* em
         //sigrl with too small size, it should contains at least sigrl header and the ECDSA Signature
         return PVEC_SIGRL_INTEGRITY_CHECK_ERROR;//signature not checked so integrity error
     }
+
+	//
+	// if we mispredict above, we might overflow
+	// when we access SigRL header
+	//
+	sgx_lfence();
+
     pve_memcpy_in(&msg3_parm->sigrl_header, emp_sigrl, sigrl_header_size);//copy in sigrl header
     msg3_parm->emp_sigrl_sig_entries = emp_sigrl+sigrl_header_size;
     pve_status = verify_sigrl_cert_type_version(&msg3_parm->sigrl_header);
@@ -120,16 +130,18 @@ static pve_status_t prepare_epid_member(const proc_prov_msg2_blob_input_t *msg2_
             return PVEC_EPID_BLOB_ERROR; //return PVEC_EPID_BLOB_ERROR to tell AESM to backup retrial of old epid blob
 
     se_plaintext_epid_data_sdk_t epid_cert;
-    se_secret_epid_data_sdk_t epid_data;
-    uint32_t epid_data_len = sizeof(epid_data);
+    //se_secret_epid_data_sdk_t epid_data;
+    sgx::custom_alignment<se_secret_epid_data_sdk_t, __builtin_offsetof(se_secret_epid_data_sdk_t, epid_private_key.f), sizeof(((se_secret_epid_data_sdk_t*)0)->epid_private_key.f)> oepid_data;
+    se_secret_epid_data_sdk_t* pepid_data = &oepid_data.v;
+    uint32_t epid_data_len = sizeof(*pepid_data);
     uint32_t epid_cert_len = sizeof(epid_cert);
     BitSupplier epid_prng = (BitSupplier)epid_random_func;
     EpidStatus epid_ret = kEpidNoErr;
     memset(&epid_cert, 0 ,sizeof(epid_cert));
-    memset(&epid_data, 0, sizeof(epid_data));    //now start unseal epid blob
+    memset(pepid_data, 0, sizeof(*pepid_data));    //now start unseal epid blob
     if((sgx_status=sgx_unseal_data(const_cast<sgx_sealed_data_t *>(old_epid_data_blob),
         reinterpret_cast<uint8_t *>(&epid_cert), &epid_cert_len,
-        reinterpret_cast<uint8_t *>(&epid_data),&epid_data_len)) != SGX_SUCCESS){
+        reinterpret_cast<uint8_t *>(pepid_data),&epid_data_len)) != SGX_SUCCESS){
             if(sgx_status == SGX_ERROR_MAC_MISMATCH){
                 ret_status = PVEC_EPID_BLOB_ERROR;//return PVEC_EPID_BLOB_ERROR to tell AESM to backup retrial of old epid blob
             }else{
@@ -158,28 +170,34 @@ static pve_status_t prepare_epid_member(const proc_prov_msg2_blob_input_t *msg2_
     //Previous gid is provided since this function assumes that Previous PSVN is provided
     //And the previous gid must be same as the gid in old epid blob cert
     if(memcmp(&epid_cert.epid_group_cert.gid, &msg2_blob_input->previous_gid, sizeof(GroupId))!=0||
-        memcmp(&epid_data.epid_private_key.gid, &msg2_blob_input->previous_gid, sizeof(GroupId))!=0){
+        memcmp(&pepid_data->epid_private_key.gid, &msg2_blob_input->previous_gid, sizeof(GroupId))!=0){
         ret_status = PVEC_EPID_BLOB_ERROR;
         goto ret_point;
     }
     //start preparing epid state for EPID signature generation
-    epid_ret = EpidMemberCreate(
-        &epid_cert.epid_group_cert,//group cert from old epid blob
-        &epid_data.epid_private_key,//group private key from old epid blob
-        &epid_data.member_precomp_data,
-        epid_prng,
-        NULL,
-        &msg3_parm->epid_member);
+    epid_ret = epid_member_create(epid_prng, NULL, NULL, &msg3_parm->epid_member);
     if(kEpidNoErr != epid_ret){
         ret_status = epid_error_to_pve_error(epid_ret);
         goto ret_point;
+    }  
+
+    epid_ret = EpidProvisionKey(msg3_parm->epid_member, 
+        &epid_cert.epid_group_cert,//group cert from old epid blob 
+        &pepid_data->epid_private_key,//group private key from old epid blob 
+        &pepid_data->member_precomp_data);
+    if (kEpidNoErr != epid_ret) {
+        ret_status = epid_error_to_pve_error(epid_ret);
+        goto ret_point;
     }
-    epid_ret = EpidMemberSetHashAlg(msg3_parm->epid_member, kSha256);
-    if(kEpidNoErr != epid_ret){
+
+    // start member
+    epid_ret = EpidMemberStartup(msg3_parm->epid_member);
+    if (kEpidNoErr != epid_ret) {
         ret_status = epid_error_to_pve_error(epid_ret);
     }
+
 ret_point:
-    (void)memset_s(&epid_data, sizeof(epid_data), 0, sizeof(epid_data));//clear secret data from stack
+    (void)memset_s(pepid_data, sizeof(*pepid_data), 0, sizeof(*pepid_data));//clear secret data from stack
     return ret_status;
 }
 
@@ -195,6 +213,7 @@ ret_point:
 //@return PVEC_SUCCESS on success and error code on failure
 //   PVEC_EPID_BLOB_ERROR is returned if msg2_blob_input.old_epid_data_blob is required but it is invalid and
 //   msg2_blob_input.previous_pi should be filled in by a Previous platform information from ProvMsg2
+
 pve_status_t proc_prov_msg2_data(const proc_prov_msg2_blob_input_t *msg2_blob_input,    //Input data of the ProvMsg2
                             uint8_t performance_rekey_used,             // if in performance rekey mode
                             const external_memory_byte_t *emp_sigrl,  //optional sigrl inside external memory
@@ -237,12 +256,19 @@ pve_status_t proc_prov_msg2_data(const proc_prov_msg2_blob_input_t *msg2_blob_in
     // we must parse SigRL header to find count of sigrl entries
     if( msg2_blob_input->is_previous_pi_provided ){//We need to generate Basic Signature if sigrl_psvn present even if sigrl is not available
         //Initialize for EPID library function to prepare for piece meal processing
-        ret = prepare_epid_member(msg2_blob_input, &msg3_parm);//old epid data blob is required
+        ret = random_stack_advance(prepare_epid_member, msg2_blob_input, &msg3_parm);//old epid data blob is required
         if( PVEC_SUCCESS!=ret )
             goto ret_point;
         if(NULL!=emp_sigrl){
             //process sigrl_header for hash value generation (used by ECDSA signature)
             ret = prov_msg2_proc_sigrl_header( emp_sigrl, sigrl_size, &msg3_parm);
+
+            //
+            // for user_check SigRL input
+            // based on n2 field in SigRL
+            //
+            sgx_lfence();
+
             if( PVEC_SUCCESS!=ret )
                 goto ret_point;
         }
@@ -251,12 +277,12 @@ pve_status_t proc_prov_msg2_data(const proc_prov_msg2_blob_input_t *msg2_blob_in
         goto ret_point;
     }
     //Now we could generate the ProvMsg3. SigRL of ProvMsg2 will be parsed in this function too if available
-    ret = gen_prov_msg3_data(msg2_blob_input, msg3_parm, performance_rekey_used, msg3_output, emp_epid_sig,
+    ret = random_stack_advance(gen_prov_msg3_data, msg2_blob_input, msg3_parm, performance_rekey_used, msg3_output, emp_epid_sig,
         epid_sig_buffer_size);
 ret_point:
     (void)memset_s(tcb, sizeof(tcb), 0, sizeof(tcb));
     if(NULL!=msg3_parm.p_msg3_state)
-        pve_aes_gcm_encrypt_fini(msg3_parm.p_msg3_state, msg3_parm.msg3_state_size);
+        sgx_aes_gcm_close((sgx_aes_state_handle_t)msg3_parm.p_msg3_state);
     if(NULL!=msg3_parm.sha_state)
         sgx_sha256_close(msg3_parm.sha_state);
     if(NULL!=msg3_parm.epid_member){

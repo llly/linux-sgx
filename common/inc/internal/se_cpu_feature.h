@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2017 Intel Corporation. All rights reserved.
+ * Copyright (C) 2011-2021 Intel Corporation. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -34,7 +34,7 @@
 #define _SE_CPU_FEATURE_H_
 
 #include <stdint.h>
-#include "se_cpu_feature_defs.h"
+#include "se_cpu_feature_defs_ext.h"
 
 
 #ifdef __cplusplus
